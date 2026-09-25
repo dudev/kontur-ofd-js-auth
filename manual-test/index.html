@@ -9,7 +9,8 @@
                                 # это ломает <script type="module">
     открыть http://127.0.0.1:.../manual-test/index.html
 
-  См. docs/roadmap.md, открытый вопрос 1 — что уже проверено этой страницей 2026-09-25.
+  См. docs/roadmap.md, открытые вопросы 1 (проверено 2026-09-25) и 2 (фильтрация сертификатов,
+  проверено там же) — что именно проверено этой страницей.
 -->
 <!doctype html>
 <html lang="ru">
@@ -30,6 +31,8 @@
 <button id="btn-list">1. Список сертификатов (listCertificateThumbprints)</button>
 <button id="btn-export">2. Экспорт первого сертификата (getCertificateBase64)</button>
 <button id="btn-roundtrip">3. Encrypt (сырой CAdESCOM) → Decrypt (наш адаптер) round-trip</button>
+<button id="btn-compare">4. Все сертификаты хранилища vs отфильтрованный список</button>
+<button id="btn-unsuitable">5. getCertificateBase64 на непригодном сертификате (ожидаем ошибку)</button>
 
 <pre id="log"></pre>
 
@@ -52,6 +55,37 @@
   window.__adapter = adapter; // for interactive poking from devtools/automation
 
   let lastThumbprint = null;
+
+  // Сырой обход хранилища в обход адаптера — чтобы увидеть ВСЕ сертификаты (включая
+  // непригодные) для сравнения с тем, что реально отдаёт listCertificateThumbprints().
+  async function describeAllCertificates() {
+    const store = await window.cadesplugin.CreateObjectAsync('CAdESCOM.Store');
+    await store.Open(
+      window.cadesplugin.CAPICOM_CURRENT_USER_STORE,
+      window.cadesplugin.CAPICOM_MY_STORE,
+      window.cadesplugin.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED,
+    );
+    const certs = await store.Certificates;
+    const count = await certs.Count;
+    const result = [];
+    for (let i = 1; i <= count; i++) {
+      const c = await certs.Item(i);
+      const thumbprint = (await c.Thumbprint).trim().toUpperCase();
+      const subject = await c.SubjectName;
+      let algorithmOid;
+      try {
+        const publicKey = await c.PublicKey();
+        algorithmOid = await (await publicKey.Algorithm).Value;
+      } catch (e) {
+        algorithmOid = 'ERR: ' + (e?.message ?? String(e));
+      }
+      const validTo = await c.ValidToDate;
+      const hasPrivateKey = await c.HasPrivateKey();
+      result.push({ thumbprint, subject, algorithmOid, validTo, hasPrivateKey });
+    }
+    await store.Close();
+    return result;
+  }
 
   window.cadesplugin.then(
     () => { status.textContent = 'Плагин загружен ✅'; },
@@ -132,6 +166,46 @@
       append('ROUND-TRIP RESULT', decryptedText === plaintext ? 'MATCH ✅' : 'MISMATCH ❌');
     } catch (e) {
       appendError('roundtrip', e);
+    }
+  });
+
+  document.getElementById('btn-compare').addEventListener('click', async () => {
+    try {
+      const [all, filtered] = await Promise.all([describeAllCertificates(), adapter.listCertificateThumbprints()]);
+      const filteredSet = new Set(filtered);
+      const table = all.map((c) => ({
+        thumbprint: c.thumbprint,
+        subject: c.subject.slice(0, 40),
+        algorithmOid: c.algorithmOid,
+        validTo: c.validTo,
+        hasPrivateKey: c.hasPrivateKey,
+        includedByAdapter: filteredSet.has(c.thumbprint) ? '✅' : '❌',
+      }));
+      append(`Все сертификаты хранилища (${all.length}) vs listCertificateThumbprints() (${filtered.length})`, table);
+    } catch (e) {
+      appendError('compare', e);
+    }
+  });
+
+  document.getElementById('btn-unsuitable').addEventListener('click', async () => {
+    try {
+      const [all, filtered] = await Promise.all([describeAllCertificates(), adapter.listCertificateThumbprints()]);
+      const filteredSet = new Set(filtered);
+      const unsuitable = all.find((c) => !filteredSet.has(c.thumbprint));
+      if (!unsuitable) {
+        append('getCertificateBase64 on unsuitable cert', 'Все сертификаты в хранилище пригодны — нечего проверить');
+        return;
+      }
+      append('using unsuitable thumbprint', `${unsuitable.thumbprint} (${unsuitable.subject.slice(0, 40)})`);
+
+      try {
+        await adapter.getCertificateBase64(unsuitable.thumbprint);
+        append('getCertificateBase64 on unsuitable cert', 'ОШИБКА ТЕСТА: ожидалось исключение, но его не было');
+      } catch (e) {
+        append('getCertificateBase64 threw as expected', e.message);
+      }
+    } catch (e) {
+      appendError('unsuitable certificate test setup', e);
     }
   });
 </script>
