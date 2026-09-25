@@ -2,7 +2,11 @@ name: MegaLinter
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
@@ -12,6 +16,7 @@ jobs:
   megalinter:
     name: MegaLinter
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:

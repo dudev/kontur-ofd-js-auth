@@ -1,0 +1,30 @@
+name: npm audit
+
+# Runs on a schedule rather than on every push, so newly published advisories in dev
+# dependencies don't turn unrelated PRs red. Uses the npm registry advisory database —
+# same role as composer audit on the PHP side.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
