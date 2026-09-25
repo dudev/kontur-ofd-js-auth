@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WindowCadesPluginAdapter } from '../src/WindowCadesPluginAdapter.js';
 import type { CertificateSummary } from '../src/CryptoProAdapter.js';
-import type { CadesCertificate, CadesCertificates, CadesEnvelopedData, CadesPlugin, CadesStore } from '../src/cadesplugin.types.js';
+import type {
+  CadesCertificate,
+  CadesCertificates,
+  CadesEnvelopedData,
+  CadesPlugin,
+  CadesStore,
+} from '../src/cadesplugin.types.js';
 
 function firstCertificate(certificates: readonly CertificateSummary[]): CertificateSummary {
   const [certificate] = certificates;
@@ -58,7 +64,9 @@ function makeCertificate(spec: FakeCertSpec): CadesCertificate {
   };
 }
 
-function makeStore(certs: readonly FakeCertSpec[]): CadesStore & { readonly Open: ReturnType<typeof vi.fn>; readonly Close: ReturnType<typeof vi.fn> } {
+function makeStore(
+  certs: readonly FakeCertSpec[],
+): CadesStore & { readonly Open: ReturnType<typeof vi.fn>; readonly Close: ReturnType<typeof vi.fn> } {
   // Мемоизируем по индексу — иначе двойной Item(i) вернул бы два разных мока.
   const cache = new Map<number, CadesCertificate>();
   const certificates: CadesCertificates = {
@@ -86,7 +94,9 @@ function makeStore(certs: readonly FakeCertSpec[]): CadesStore & { readonly Open
   };
 }
 
-function makeEnvelopedData(options: { readonly content?: string; readonly decryptError?: unknown } = {}): CadesEnvelopedData {
+function makeEnvelopedData(
+  options: { readonly content?: string; readonly decryptError?: unknown } = {},
+): CadesEnvelopedData {
   return {
     propset_ContentEncoding: vi.fn().mockResolvedValue(undefined),
     Decrypt:
@@ -97,10 +107,12 @@ function makeEnvelopedData(options: { readonly content?: string; readonly decryp
   };
 }
 
-function makeCadesplugin(options: {
-  readonly store?: ReturnType<typeof makeStore>;
-  readonly envelopedData?: CadesEnvelopedData;
-} = {}): CadesPlugin {
+function makeCadesplugin(
+  options: {
+    readonly store?: ReturnType<typeof makeStore>;
+    readonly envelopedData?: CadesEnvelopedData;
+  } = {},
+): CadesPlugin {
   const store = options.store ?? makeStore([]);
   const envelopedData = options.envelopedData ?? makeEnvelopedData();
 
@@ -195,7 +207,12 @@ describe('WindowCadesPluginAdapter', () => {
 
     it('does not treat an absent PrivateKeyUsagePeriod or KeyUsage extension as a restriction', async () => {
       const store = makeStore([
-        { thumbprint: 'NO-EXTENSIONS', privateKeyUsageFrom: null, privateKeyUsageTo: null, keyUsage: { isPresent: false } },
+        {
+          thumbprint: 'NO-EXTENSIONS',
+          privateKeyUsageFrom: null,
+          privateKeyUsageTo: null,
+          keyUsage: { isPresent: false },
+        },
         { thumbprint: 'KEY-AGREEMENT-ONLY', keyUsage: { isPresent: true, keyEncipherment: false, keyAgreement: true } },
       ]);
       stubWindowCadesplugin(makeCadesplugin({ store }));
@@ -224,7 +241,8 @@ describe('WindowCadesPluginAdapter', () => {
       const store = makeStore([
         {
           thumbprint: 'FULL-DN',
-          subjectName: 'SN=Русанов, G=Евгений Александрович, CN=Русанов Евгений Александрович, C=RU, ИНН=182811189442, ОГРНИП=326965800118081',
+          subjectName:
+            'SN=Русанов, G=Евгений Александрович, CN=Русанов Евгений Александрович, C=RU, ИНН=182811189442, ОГРНИП=326965800118081',
           issuerName: 'CN=Тестовый УЦ, O=ООО Тестовый УЦ, C=RU',
           validTo: '2027-01-01T00:00:00.000Z',
         },
@@ -247,7 +265,10 @@ describe('WindowCadesPluginAdapter', () => {
 
     it('reads OGRN from either ОГРН (legal entity) or ОГРНИП (sole proprietor), and organization when present', async () => {
       const store = makeStore([
-        { thumbprint: 'LEGAL-ENTITY', subjectName: 'CN=ООО Ромашка, O=ООО Ромашка, ИНН=7701234567, ОГРН=1027700132195' },
+        {
+          thumbprint: 'LEGAL-ENTITY',
+          subjectName: 'CN=ООО Ромашка, O=ООО Ромашка, ИНН=7701234567, ОГРН=1027700132195',
+        },
       ]);
       stubWindowCadesplugin(makeCadesplugin({ store }));
       const adapter = new WindowCadesPluginAdapter();
@@ -265,7 +286,12 @@ describe('WindowCadesPluginAdapter', () => {
 
       const certificate = firstCertificate(await adapter.listCertificates());
 
-      expect(certificate).toMatchObject({ ownerName: '7927f6e3-17e9-4b1e-8909-25826c74049f', organization: null, inn: null, ogrn: null });
+      expect(certificate).toMatchObject({
+        ownerName: '7927f6e3-17e9-4b1e-8909-25826c74049f',
+        organization: null,
+        inn: null,
+        ogrn: null,
+      });
     });
 
     it('does not split a DN value on a backslash-escaped comma', async () => {
@@ -290,7 +316,9 @@ describe('WindowCadesPluginAdapter', () => {
     });
 
     it('does not split a quoted DN value on a comma inside the quotes', async () => {
-      const store = makeStore([{ thumbprint: 'QUOTED-COMMA', subjectName: 'CN=Иванов Иван, O="ООО ""Ромашка, Инвест"""' }]);
+      const store = makeStore([
+        { thumbprint: 'QUOTED-COMMA', subjectName: 'CN=Иванов Иван, O="ООО ""Ромашка, Инвест"""' },
+      ]);
       stubWindowCadesplugin(makeCadesplugin({ store }));
       const adapter = new WindowCadesPluginAdapter();
 

@@ -28,6 +28,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm run format:check
       - run: npm run build
       # Catches broken exports/types/files before publishing.
       - run: npx --yes publint@0.3 --strict
