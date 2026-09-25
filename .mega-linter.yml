@@ -8,4 +8,8 @@ DISABLE:
   - COPYPASTE
   # Own ESLint job already covers this with project-specific config (typescript-eslint strict).
   - TYPESCRIPT_ES
+DISABLE_LINTERS:
+  # Bundled grype v0.94.0 can't load its current vulnerability DB (schema migration error);
+  # trivy and npm audit already cover dependency vulnerabilities.
+  - REPOSITORY_GRYPE
 PRINT_ALPACA: false
