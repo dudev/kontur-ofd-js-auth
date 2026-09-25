@@ -19,6 +19,13 @@ export default defineConfig(
     },
   },
   {
+    // Braceless if bodies are fine on one line, but once Prettier wraps them onto the next line
+    // they must get braces.
+    rules: {
+      curly: ['error', 'multi-line'],
+    },
+  },
+  {
     // vi.fn() mocks are safe to pass around unbound — this rule's false-positive on them is a
     // well-known typescript-eslint/vitest interaction, not a real risk in test code.
     files: ['tests/**/*.test.ts'],
