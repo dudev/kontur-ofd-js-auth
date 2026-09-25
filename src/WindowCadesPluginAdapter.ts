@@ -10,6 +10,12 @@ import type { CadesCertificate, CadesPlugin, CadesStore } from './cadesplugin.ty
  * открытый вопрос 1 — что именно проверено и что осталось непроверенным.
  */
 export class WindowCadesPluginAdapter implements CryptoProAdapter {
+  /**
+   * Возвращает только сертификаты, пригодные для аутентификации по ЭП в Контур.ОФД (ГОСТ-алгоритм,
+   * не просрочен, есть закрытый ключ) — непригодные тихо пропускаются, а не попадают в список
+   * потребителю на выбор. См. `docs/roadmap.md`, открытый вопрос 2 — живой тест показал, что
+   * реальное хранилище пользователя обычно содержит и непригодные сертификаты (RSA, служебные).
+   */
   async listCertificateThumbprints(): Promise<readonly string[]> {
     return this.withStore(async (store) => {
       const certificates = await store.Certificates;
@@ -18,18 +24,32 @@ export class WindowCadesPluginAdapter implements CryptoProAdapter {
       const thumbprints: string[] = [];
       for (let i = 1; i <= count; i++) {
         const certificate = await certificates.Item(i);
-        thumbprints.push(normalizeThumbprint(await certificate.Thumbprint));
+        if ((await unsuitabilityReasons(certificate)).length === 0) {
+          thumbprints.push(normalizeThumbprint(await certificate.Thumbprint));
+        }
       }
 
       return thumbprints;
     });
   }
 
+  /**
+   * В отличие от `listCertificateThumbprints()`, здесь сертификат передаётся явно потребителем
+   * (например, в обход UI выбора) — поэтому на непригодный сертификат бросаем понятную ошибку с
+   * перечислением причин, а не молча пропускаем.
+   */
   async getCertificateBase64(thumbprint: string): Promise<string> {
     const { plugin: cadesplugin } = await getCadesplugin();
 
     return this.withStore(async (store) => {
       const certificate = await findCertificateByThumbprint(store, thumbprint);
+      const reasons = await unsuitabilityReasons(certificate);
+      if (reasons.length > 0) {
+        throw new Error(
+          `Certificate "${thumbprint}" is not suitable for Kontur.OFD certificate-based auth: ${reasons.join('; ')}`,
+        );
+      }
+
       const exported = await certificate.Export(cadesplugin.CADESCOM_ENCODE_BASE64);
 
       return stripWhitespace(exported);
@@ -130,4 +150,53 @@ function describeError(cadesplugin: CadesPlugin, error: unknown): string {
   } catch {
     return error instanceof Error ? error.message : String(error);
   }
+}
+
+/**
+ * OID алгоритмов ГОСТ Р 34.10, которые Контур.ОФД поддерживает для ЭП-аутентификации (RFC 4491
+ * §2.3.2 для 2001-го, RFC 9215 §4.1 для 2012-го) — точный список, не префиксная проверка
+ * "начинается с 1.2.643": под той же веткой (`iso.member-body.ru`) лежит и устаревший ключевой OID
+ * ГОСТ Р 34.10-94, который не должен молча проходить проверку как современный алгоритм.
+ */
+const GOST_PUBLIC_KEY_ALGORITHM_OIDS: ReadonlySet<string> = new Set([
+  '1.2.643.2.2.19', // GOST R 34.10-2001
+  '1.2.643.7.1.1.1.1', // GOST R 34.10-2012, 256 бит
+  '1.2.643.7.1.1.1.2', // GOST R 34.10-2012, 512 бит
+]);
+
+async function isGostCertificate(certificate: CadesCertificate): Promise<boolean> {
+  const publicKey = await certificate.PublicKey();
+  const algorithm = await publicKey.Algorithm;
+  const oid = await algorithm.Value;
+
+  return GOST_PUBLIC_KEY_ALGORITHM_OIDS.has(oid);
+}
+
+/**
+ * Сравниваем даты вручную, а не через `Certificate.IsValid()` — тот строит полную цепочку
+ * сертификатов и может обращаться в сеть за проверкой отзыва (поведение `CheckFlag` для
+ * CryptoPro не задокументировано, у Microsoft CAPICOM по умолчанию — `CAPICOM_CHECK_ONLINE_ALL`),
+ * что не годится для быстрой локальной фильтрации списка сертификатов.
+ */
+async function isWithinValidityPeriod(certificate: CadesCertificate): Promise<boolean> {
+  const [validFrom, validTo] = await Promise.all([certificate.ValidFromDate, certificate.ValidToDate]);
+  const now = Date.now();
+
+  return new Date(validFrom).getTime() <= now && now <= new Date(validTo).getTime();
+}
+
+/** Пустой массив — сертификат пригоден для аутентификации по ЭП в Контур.ОФД. */
+async function unsuitabilityReasons(certificate: CadesCertificate): Promise<readonly string[]> {
+  const [isGost, isValidPeriod, hasPrivateKey] = await Promise.all([
+    isGostCertificate(certificate),
+    isWithinValidityPeriod(certificate),
+    certificate.HasPrivateKey(),
+  ]);
+
+  const reasons: string[] = [];
+  if (!isGost) reasons.push('does not use a GOST public-key algorithm supported by Kontur.OFD (ГОСТ Р 34.10-2001/2012)');
+  if (!isValidPeriod) reasons.push('is expired or not yet valid');
+  if (!hasPrivateKey) reasons.push('has no private key available in the current user\'s store');
+
+  return reasons;
 }

@@ -2,19 +2,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WindowCadesPluginAdapter } from '../src/WindowCadesPluginAdapter.js';
 import type { CadesCertificate, CadesCertificates, CadesEnvelopedData, CadesPlugin, CadesStore } from '../src/cadesplugin.types.js';
 
+const GOST_2012_256_OID = '1.2.643.7.1.1.1.1';
+const RSA_OID = '1.2.840.113549.1.1.1';
+
 interface FakeCertSpec {
   readonly thumbprint: string;
   readonly base64?: string;
+  readonly algorithmOid?: string;
+  readonly validFrom?: string;
+  readonly validTo?: string;
+  readonly hasPrivateKey?: boolean;
 }
 
 function makeCertificate(spec: FakeCertSpec): CadesCertificate {
   return {
     Thumbprint: Promise.resolve(spec.thumbprint),
     Export: vi.fn().mockResolvedValue(spec.base64 ?? `EXPORTED-${spec.thumbprint}`),
+    ValidFromDate: Promise.resolve(spec.validFrom ?? '2020-01-01T00:00:00.000Z'),
+    ValidToDate: Promise.resolve(spec.validTo ?? '2099-01-01T00:00:00.000Z'),
+    HasPrivateKey: vi.fn().mockResolvedValue(spec.hasPrivateKey ?? true),
+    PublicKey: vi.fn().mockResolvedValue({
+      Algorithm: Promise.resolve({ Value: Promise.resolve(spec.algorithmOid ?? GOST_2012_256_OID) }),
+    }),
   };
 }
 
 function makeStore(certs: readonly FakeCertSpec[]): CadesStore & { readonly Open: ReturnType<typeof vi.fn>; readonly Close: ReturnType<typeof vi.fn> } {
+  // Мемоизируем по индексу — иначе Item(i), вызванный дважды (например, тестом и самим адаптером),
+  // возвращал бы два разных объекта с двумя разными vi.fn(), и проверка вызова мока была бы бессмысленной.
+  const cache = new Map<number, CadesCertificate>();
   const certificates: CadesCertificates = {
     Count: Promise.resolve(certs.length),
     Item: vi.fn().mockImplementation((index: number) => {
@@ -23,7 +39,13 @@ function makeStore(certs: readonly FakeCertSpec[]): CadesStore & { readonly Open
         throw new Error(`Test double: no certificate at index ${String(index)}`);
       }
 
-      return Promise.resolve(makeCertificate(spec));
+      let certificate = cache.get(index);
+      if (certificate === undefined) {
+        certificate = makeCertificate(spec);
+        cache.set(index, certificate);
+      }
+
+      return Promise.resolve(certificate);
     }),
   };
 
@@ -121,6 +143,22 @@ describe('WindowCadesPluginAdapter', () => {
       await expect(adapter.listCertificateThumbprints()).rejects.toThrow('boom');
       expect(store.Close).toHaveBeenCalledTimes(1);
     });
+
+    it('excludes certificates that are unsuitable for Kontur.OFD certificate-based auth', async () => {
+      const store = makeStore([
+        { thumbprint: 'GOOD', algorithmOid: GOST_2012_256_OID },
+        { thumbprint: 'RSA-CERT', algorithmOid: RSA_OID },
+        { thumbprint: 'EXPIRED', validTo: '2020-01-01T00:00:00.000Z' },
+        { thumbprint: 'NOT-YET-VALID', validFrom: '2099-01-01T00:00:00.000Z' },
+        { thumbprint: 'NO-PRIVATE-KEY', hasPrivateKey: false },
+      ]);
+      stubWindowCadesplugin(makeCadesplugin({ store }));
+      const adapter = new WindowCadesPluginAdapter();
+
+      const thumbprints = await adapter.listCertificateThumbprints();
+
+      expect(thumbprints).toEqual(['GOOD']);
+    });
   });
 
   describe('getCertificateBase64', () => {
@@ -140,6 +178,28 @@ describe('WindowCadesPluginAdapter', () => {
       const adapter = new WindowCadesPluginAdapter();
 
       await expect(adapter.getCertificateBase64('MISSING')).rejects.toThrow(/was not found/);
+    });
+
+    it('throws a descriptive error naming every reason when the certificate is unsuitable', async () => {
+      const store = makeStore([
+        { thumbprint: 'BAD', algorithmOid: RSA_OID, validTo: '2020-01-01T00:00:00.000Z', hasPrivateKey: false },
+      ]);
+      stubWindowCadesplugin(makeCadesplugin({ store }));
+      const adapter = new WindowCadesPluginAdapter();
+
+      await expect(adapter.getCertificateBase64('BAD')).rejects.toThrow(
+        /GOST public-key algorithm.*is expired or not yet valid.*no private key/,
+      );
+    });
+
+    it('does not export an unsuitable certificate', async () => {
+      const store = makeStore([{ thumbprint: 'BAD', algorithmOid: RSA_OID }]);
+      const certificate = await (await store.Certificates).Item(1);
+      stubWindowCadesplugin(makeCadesplugin({ store }));
+      const adapter = new WindowCadesPluginAdapter();
+
+      await expect(adapter.getCertificateBase64('BAD')).rejects.toThrow();
+      expect(certificate.Export).not.toHaveBeenCalled();
     });
   });
 

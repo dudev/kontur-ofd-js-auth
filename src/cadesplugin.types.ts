@@ -24,10 +24,31 @@ export interface CadesCertificates {
   Item(index: number): Promise<CadesCertificate>;
 }
 
-/** `CAdESCOM.Certificate` (тип библиотеки — `CPCertificate`). */
+/** `CAdESCOM.Oid` — идентификатор алгоритма (`docs.cryptopro.ru/cades/reference/cadescom/cadescom_class/oid`). */
+export interface CadesOid {
+  readonly Value: Promise<string>;
+}
+
+/** `CAdESCOM.PublicKey` (`docs.cryptopro.ru/cades/reference/cadescom/cadescom_class/publickey`). */
+export interface CadesPublicKey {
+  readonly Algorithm: Promise<CadesOid>;
+}
+
+/**
+ * `CAdESCOM.Certificate` (тип библиотеки — `CPCertificate`). `PublicKey` — метод, не свойство (в
+ * отличие от `Thumbprint`/`ValidFromDate`/`ValidToDate`) — так задокументировано в
+ * `cadescom_class/cpcertificate` и подтверждено официальным демо-кодом (`async_code.js`:
+ * `await cert.PublicKey()`, не `await cert.PublicKey`).
+ */
 export interface CadesCertificate {
   readonly Thumbprint: Promise<string>;
+  /** Официальный демо-код оборачивает результат в `new Date(...)` — сам плагин не гарантирует тип. */
+  readonly ValidFromDate: Promise<string>;
+  readonly ValidToDate: Promise<string>;
   Export(encoding: number): Promise<string>;
+  PublicKey(): Promise<CadesPublicKey>;
+  /** Проверяет только наличие `CERT_KEY_PROV_INFO_PROP_ID` — не гарантирует, что контейнер ключа реально доступен. */
+  HasPrivateKey(): Promise<boolean>;
 }
 
 /**
