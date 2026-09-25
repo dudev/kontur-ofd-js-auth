@@ -43,8 +43,7 @@ function makeCertificate(spec: FakeCertSpec): CadesCertificate {
     Export: vi.fn().mockResolvedValue(spec.base64 ?? `EXPORTED-${spec.thumbprint}`),
     ValidFromDate: Promise.resolve(spec.validFrom ?? '2020-01-01T00:00:00.000Z'),
     ValidToDate: Promise.resolve(spec.validTo ?? '2099-01-01T00:00:00.000Z'),
-    // По умолчанию у сертификата нет ни того, ни другого расширения — большинство реальных
-    // сертификатов их и не имеют, это подтверждённое поведение "нет ограничения", не хак теста.
+    // По умолчанию расширения нет — подтверждённое поведение "нет ограничения", не хак теста.
     PrivateKeyUsagePeriodFrom: Promise.resolve(spec.privateKeyUsageFrom ?? null),
     PrivateKeyUsagePeriodTo: Promise.resolve(spec.privateKeyUsageTo ?? null),
     HasPrivateKey: vi.fn().mockResolvedValue(spec.hasPrivateKey ?? true),
@@ -60,8 +59,7 @@ function makeCertificate(spec: FakeCertSpec): CadesCertificate {
 }
 
 function makeStore(certs: readonly FakeCertSpec[]): CadesStore & { readonly Open: ReturnType<typeof vi.fn>; readonly Close: ReturnType<typeof vi.fn> } {
-  // Мемоизируем по индексу — иначе Item(i), вызванный дважды (например, тестом и самим адаптером),
-  // возвращал бы два разных объекта с двумя разными vi.fn(), и проверка вызова мока была бы бессмысленной.
+  // Мемоизируем по индексу — иначе двойной Item(i) вернул бы два разных мока.
   const cache = new Map<number, CadesCertificate>();
   const certificates: CadesCertificates = {
     Count: Promise.resolve(certs.length),
@@ -281,8 +279,7 @@ describe('WindowCadesPluginAdapter', () => {
     });
 
     it('unwraps a quoted DN value and collapses doubled internal quotes (RFC 2253 quoted-string)', async () => {
-      // Реально встретилось на живом сертификате 2026-09-25 — CN издателя пришёл именно в таком
-      // виде, не гипотетический случай.
+      // Реально встретилось на живом сертификате 2026-09-25, не гипотетический случай.
       const store = makeStore([{ thumbprint: 'QUOTED-ISSUER', issuerName: 'CN="ООО ""Сертум-Про"""' }]);
       stubWindowCadesplugin(makeCadesplugin({ store }));
       const adapter = new WindowCadesPluginAdapter();

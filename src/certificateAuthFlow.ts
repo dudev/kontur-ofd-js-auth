@@ -1,10 +1,7 @@
 import type { CryptoProAdapter } from './CryptoProAdapter.js';
 import type { ApproveCertPayload, EncryptedKeyResponse } from './types.js';
 
-/**
- * Сертификат для шага 1 (`POST .../auth/certificate-frontend/init` на backend, который дальше
- * зовёт `authenticate-by-cert`) — единственное, что нужно с браузера на этом шаге.
- */
+/** Сертификат для шага 1 (`POST .../auth/certificate-frontend/init` → `authenticate-by-cert`). */
 export async function getCertificateForInit(
   adapter: CryptoProAdapter,
   thumbprint: string,
@@ -17,16 +14,7 @@ export async function getCertificateForInit(
   return { certificateBase64 };
 }
 
-/**
- * Расшифровывает `EncryptedKeyResponse` (ответ backend-прокси на шаг 1) локально, через плагин, и
- * собирает тело для шага 2 (`POST .../auth/certificate-frontend/approve`). Ни `encryptedKeyBase64`,
- * ни результат расшифровки этой функцией никуда не сохраняются — вызывающий код отправляет
- * возвращённый объект на свой backend и на этом всё, ни один байт не должен задержаться дольше.
- *
- * Без отпечатка сертификата — расшифровка (`CryptoProAdapter::decryptEncryptedKey()`) сама находит
- * подходящий приватный ключ по содержимому CMS-конверта, не по явно выбранному сертификату (см.
- * `WindowCadesPluginAdapter`).
- */
+/** Расшифровывает `EncryptedKeyResponse` локально и собирает тело для шага 2 (`.../approve`) — без отпечатка сертификата, плагин сам находит ключ. */
 export async function decryptForApproveCert(
   adapter: CryptoProAdapter,
   encryptedKey: EncryptedKeyResponse,

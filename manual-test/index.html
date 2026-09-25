@@ -9,9 +9,7 @@
                                 # это ломает <script type="module">
     открыть http://127.0.0.1:.../manual-test/index.html
 
-  См. docs/roadmap.md, открытые вопросы 1 (проверено 2026-09-25) и 2 (фильтрация сертификатов и
-  пример потребительского UI выбора — диалог ниже, проверено там же) — что именно проверено этой
-  страницей.
+  См. docs/roadmap.md, открытые вопросы 1 и 2 — что именно этой страницей проверено.
 -->
 <!doctype html>
 <html lang="ru">
@@ -34,14 +32,7 @@
 <h1>kontur-ofd-js-auth — ручной тест</h1>
 <p class="status" id="status">Загрузка плагина…</p>
 
-<!--
-  Диалог выбора сертификата НЕ часть библиотеки — kontur-ofd-js-auth сознательно не владеет UI
-  выбора (см. docs/roadmap.md, открытый вопрос 2: "какие сертификаты предлагать" и "что о них
-  показать" решает listCertificates(), "как их отрисовать" — забота потребителя). Этот диалог —
-  пример такого потребительского UI поверх уже отфильтрованного списка с уже готовыми для показа
-  полями (имя, организация, издатель, срок действия, ИНН/ОГРН), нужен только этой тестовой
-  странице, чтобы проверять сценарии 2 и 3 не только на первом сертификате из списка.
--->
+<!-- Диалог выбора — не часть библиотеки, лишь пример потребительского UI поверх listCertificates() (см. docs/roadmap.md, вопрос 2). -->
 <button id="btn-choose-cert">Выбрать сертификат для тестов 2-3 (диалог)</button>
 <p id="selected-cert">Сертификат не выбран — будет использован первый подходящий</p>
 
@@ -81,8 +72,7 @@
 
   let lastThumbprint = null;
 
-  // Сырой обход хранилища в обход адаптера — чтобы увидеть ВСЕ сертификаты (включая
-  // непригодные) для сравнения с тем, что реально отдаёт listCertificates().
+  // Сырой обход хранилища в обход адаптера — чтобы увидеть и непригодные сертификаты тоже.
   async function describeAllCertificates() {
     const store = await window.cadesplugin.CreateObjectAsync('CAdESCOM.Store');
     await store.Open(
@@ -155,8 +145,7 @@
     certDialogList.textContent = 'Загрузка списка сертификатов…';
     certDialog.showModal();
     try {
-      // Ровно то, что реально предложил бы потребитель — данные уже отфильтрованы и разобраны
-      // самой библиотекой (имя/организация/издатель/срок/ИНН/ОГРН), без обхода в обход адаптера.
+      // Ровно то, что реально предложил бы потребитель — без обхода адаптера напрямую.
       const certificates = await adapter.listCertificates();
 
       certDialogList.textContent = '';
@@ -228,9 +217,7 @@
       if (!lastThumbprint) { append('roundtrip', 'No certificates found'); return; }
       append('using thumbprint', lastThumbprint);
 
-      // Raw CAdESCOM Encrypt — not part of the shipped adapter (Kontur.OFD only ever asks us to
-      // Decrypt an EncryptedKey it produces, we never need to Encrypt in production), but useful
-      // here to manufacture a real CMS envelope to test our Decrypt path against.
+      // Raw CAdESCOM Encrypt — not shipped in the adapter, only to manufacture a CMS envelope to test Decrypt against.
       const store = await window.cadesplugin.CreateObjectAsync('CAdESCOM.Store');
       await store.Open(
         window.cadesplugin.CAPICOM_CURRENT_USER_STORE,

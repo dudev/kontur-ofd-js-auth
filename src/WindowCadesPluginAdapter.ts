@@ -1,22 +1,9 @@
 import type { CertificateSummary, CryptoProAdapter } from './CryptoProAdapter.js';
 import type { CadesCertificate, CadesPlugin, CadesStore } from './cadesplugin.types.js';
 
-/**
- * `CryptoProAdapter` поверх `window.cadesplugin` (КриптоПро ЭЦП Browser plug-in). Собрано против
- * официальной документации CryptoPro и демо-примеров (`docs.cryptopro.ru/cades/plugin/*`,
- * `cadesplugin_api.js`, `async_code.js` с cryptopro.ru) и проверено 2026-09-25 на реальном стенде
- * (`manual-test/index.html`) — все три метода отработали на настоящем плагине и хранилище
- * сертификатов, включая `Decrypt()` без явного указания сертификата. См. `docs/roadmap.md`,
- * открытый вопрос 1 — что именно проверено и что осталось непроверенным.
- */
+/** `CryptoProAdapter` поверх `window.cadesplugin` (КриптоПро ЭЦП Browser plug-in) — verified against real hardware 2026-09-25, see docs/roadmap.md. */
 export class WindowCadesPluginAdapter implements CryptoProAdapter {
-  /**
-   * Возвращает только сертификаты, пригодные для аутентификации по ЭП в Контур.ОФД (ГОСТ-алгоритм,
-   * не просрочен и не вне PrivateKeyUsagePeriod, есть закрытый ключ, KeyUsage допускает обмен
-   * ключом) — непригодные тихо пропускаются, а не попадают в список потребителю на выбор. См.
-   * `docs/roadmap.md`, открытый вопрос 2 — живой тест показал, что реальное хранилище пользователя
-   * обычно содержит и непригодные сертификаты (RSA, служебные, просроченные).
-   */
+  /** Только сертификаты, пригодные для аутентификации по ЭП в Контур.ОФД — непригодные тихо пропускаются (см. docs/roadmap.md, открытый вопрос 2). */
   async listCertificates(): Promise<readonly CertificateSummary[]> {
     return this.withStore(async (store) => {
       const certificates = await store.Certificates;
@@ -34,11 +21,7 @@ export class WindowCadesPluginAdapter implements CryptoProAdapter {
     });
   }
 
-  /**
-   * В отличие от `listCertificates()`, здесь сертификат передаётся явно потребителем (например, в
-   * обход UI выбора) — поэтому на непригодный сертификат бросаем понятную ошибку с перечислением
-   * причин, а не молча пропускаем.
-   */
+  /** В отличие от `listCertificates()`, сертификат передан явно — на непригодный бросаем ошибку с причинами, а не молча пропускаем. */
   async getCertificateBase64(thumbprint: string): Promise<string> {
     const { plugin: cadesplugin } = await getCadesplugin();
 
@@ -57,19 +40,13 @@ export class WindowCadesPluginAdapter implements CryptoProAdapter {
     });
   }
 
-  /**
-   * `thumbprint` не участвует в самом вызове — `CPEnvelopedData.Decrypt()` не принимает сертификат
-   * как параметр, ищет подходящий приватный ключ в хранилище сам по содержимому CMS-конверта (см.
-   * `CryptoProAdapter::decryptEncryptedKey()`). Метод интерфейса всё равно принимает только
-   * `encryptedKeyBase64` — сигнатура уже отражает это, здесь просто отдельно проговорено, почему.
-   */
+  /** Сертификат в вызов не передаётся — `Decrypt()` сам находит нужный ключ по содержимому CMS-конверта. */
   async decryptEncryptedKey(encryptedKeyBase64: string): Promise<string> {
     const { plugin: cadesplugin } = await getCadesplugin();
     const envelopedData = await cadesplugin.CreateObjectAsync('CAdESCOM.CPEnvelopedData');
 
     try {
-      // Обязательно до чтения Content — иначе плагин отдаст UCS2LE-строку вместо Base64 байт
-      // (см. cadesplugin.types.ts).
+      // До Decrypt() — иначе Content придёт UCS2LE-строкой, не Base64.
       await envelopedData.propset_ContentEncoding(cadesplugin.CADESCOM_BASE64_TO_BINARY);
       await envelopedData.Decrypt(encryptedKeyBase64);
 
@@ -98,12 +75,7 @@ export class WindowCadesPluginAdapter implements CryptoProAdapter {
   }
 }
 
-/**
- * `window.cadesplugin` — сам нативный Promise; резолвится после загрузки плагина со значением
- * `undefined`, поэтому после `await` используем сам объект `cadesplugin`, а не то, чем разрешился
- * `await` (см. `cadesplugin.types.ts`). Отклоняется, если плагин не установлен/не загрузился за
- * таймаут (по умолчанию 20с, `window.cadesplugin_load_timeout`).
- */
+/** `window.cadesplugin` сам является Promise, резолвится в `undefined` — после `await` используем сам объект, не результат ожидания. */
 async function getCadesplugin(): Promise<{ readonly plugin: CadesPlugin }> {
   if (typeof window === 'undefined' || window.cadesplugin === undefined) {
     throw new Error(
@@ -114,9 +86,7 @@ async function getCadesplugin(): Promise<{ readonly plugin: CadesPlugin }> {
   const cadesplugin = window.cadesplugin;
   await cadesplugin;
 
-  // Не `return cadesplugin` — сам cadesplugin thenable, async-функция схлопнула бы его до
-  // разрешённого значения (undefined) вместо возврата самого объекта. Заворачиваем в обычный
-  // объект, который thenable не является.
+  // Не `return cadesplugin` — thenable-chaining схлопнёт его до undefined.
   return { plugin: cadesplugin };
 }
 
@@ -135,12 +105,10 @@ async function findCertificateByThumbprint(store: CadesStore, thumbprint: string
   throw new Error(`Certificate with thumbprint "${thumbprint}" was not found in the current user's store`);
 }
 
-/** Регистр/пробелы вокруг отпечатка не задокументированы явно — сравниваем без оглядки на них, а не на удачу. */
 function normalizeThumbprint(thumbprint: string): string {
   return thumbprint.trim().toUpperCase();
 }
 
-/** `Export()` не документирует, добавляет ли перевод строк в Base64-вывод — на всякий случай убираем весь whitespace. */
 function stripWhitespace(value: string): string {
   return value.replace(/\s+/g, '');
 }
@@ -153,12 +121,7 @@ function describeError(cadesplugin: CadesPlugin, error: unknown): string {
   }
 }
 
-/**
- * OID алгоритмов ГОСТ Р 34.10, которые Контур.ОФД поддерживает для ЭП-аутентификации (RFC 4491
- * §2.3.2 для 2001-го, RFC 9215 §4.1 для 2012-го) — точный список, не префиксная проверка
- * "начинается с 1.2.643": под той же веткой (`iso.member-body.ru`) лежит и устаревший ключевой OID
- * ГОСТ Р 34.10-94, который не должен молча проходить проверку как современный алгоритм.
- */
+/** Точные OID (не префикс `1.2.643.` — та же ветка содержит устаревший ГОСТ Р 34.10-94). */
 const GOST_PUBLIC_KEY_ALGORITHM_OIDS: ReadonlySet<string> = new Set([
   '1.2.643.2.2.19', // GOST R 34.10-2001
   '1.2.643.7.1.1.1.1', // GOST R 34.10-2012, 256 бит
@@ -173,12 +136,7 @@ async function isGostCertificate(certificate: CadesCertificate): Promise<boolean
   return GOST_PUBLIC_KEY_ALGORITHM_OIDS.has(oid);
 }
 
-/**
- * Сравниваем даты вручную, а не через `Certificate.IsValid()` — тот строит полную цепочку
- * сертификатов и может обращаться в сеть за проверкой отзыва (поведение `CheckFlag` для
- * CryptoPro не задокументировано, у Microsoft CAPICOM по умолчанию — `CAPICOM_CHECK_ONLINE_ALL`),
- * что не годится для быстрой локальной фильтрации списка сертификатов.
- */
+/** Вручную, не через `Certificate.IsValid()` — тот строит цепочку и может ходить в сеть за отзывом. */
 async function isWithinValidityPeriod(certificate: CadesCertificate): Promise<boolean> {
   const [validFrom, validTo] = await Promise.all([certificate.ValidFromDate, certificate.ValidToDate]);
   const now = Date.now();
@@ -186,14 +144,7 @@ async function isWithinValidityPeriod(certificate: CadesCertificate): Promise<bo
   return new Date(validFrom).getTime() <= now && now <= new Date(validTo).getTime();
 }
 
-/**
- * Необязательное расширение X.509 (OID `2.5.29.16`) — своё, более узкое окно действия именно для
- * приватного ключа, может быть уже общего срока сертификата. У большинства сертификатов этого
- * расширения нет вообще, и официальная документация не описывает поведение чтения в этом случае —
- * поэтому читаем `From`/`To` независимо друг от друга и трактуем отсутствие/ошибку/`null` как
- * «дополнительного ограничения нет», а не как непригодность сертификата (так же поступает
- * официальный демо-код CryptoPro, оборачивая оба чтения в try/catch).
- */
+/** Необязательное расширение — отсутствие/ошибка чтения трактуется как «нет ограничения», не как непригодность. */
 async function isWithinPrivateKeyUsagePeriod(certificate: CadesCertificate): Promise<boolean> {
   const now = Date.now();
   const [from, to] = await Promise.all([
@@ -220,13 +171,7 @@ async function readOptionalDate(read: () => Promise<string | null>): Promise<Dat
   }
 }
 
-/**
- * KeyUsage (OID `2.5.29.15`) — тоже необязательное расширение; при его отсутствии (`IsPresent ===
- * false`) не считаем это ограничением, та же логика, что для PrivateKeyUsagePeriod выше. Когда
- * расширение есть, требуем keyEncipherment ИЛИ keyAgreement — оба назначения X.509 годятся для
- * обмена ключом при расшифровке, а какое именно использует конкретный ГОСТ-сертификат, источники
- * CryptoPro не специфицируют.
- */
+/** Тоже необязательное расширение; при наличии требуем keyEncipherment ИЛИ keyAgreement. */
 async function allowsKeyExchange(certificate: CadesCertificate): Promise<boolean> {
   const keyUsage = await certificate.KeyUsage();
   if (!(await keyUsage.IsPresent)) return true;
@@ -257,22 +202,11 @@ async function describeCertificate(certificate: CadesCertificate): Promise<Certi
     issuerName: issuer.get('CN') ?? null,
     validTo: new Date(validTo),
     inn: subject.get('ИНН') ?? null,
-    // ОГРН — у юрлиц, ОГРНИП — у ИП; сертификат несёт только один из двух атрибутов.
     ogrn: subject.get('ОГРН') ?? subject.get('ОГРНИП') ?? null,
   };
 }
 
-/**
- * `SubjectName`/`IssuerName` — DN-строка вида `"CN=Иванов Иван, SN=Иванов, ИНН=..., O=..."`.
- * Формат/набор атрибутов нигде официально не специфицирован — распарсено так же, как это делает
- * официальный демо-код CryptoPro (`async_code.js`: `CertificateAdjuster.GetCertName()`/`GetIssuer()`
- * извлекают `CN=` из этой же строки, не через `GetInfo()` — см. `docs/roadmap.md`). Значения могут
- * быть заключены в кавычки с удвоением внутренних кавычек (`"ООО ""Ромашка"""`, RFC 2253/4514
- * quoted-string — реально наблюдалось у CN издателя на живом сертификате 2026-09-25, не
- * гипотетический случай) или содержать экранированную запятую вне кавычек (`\,`) — наивный
- * `split(',')` в обоих случаях разбил бы значение на два поля, поэтому запятые/кавычки внутри
- * значения не считаются его границей.
- */
+/** Разбор DN-строки — так же, как официальный демо-код CryptoPro (CN= из SubjectName/IssuerName, не GetInfo()). */
 function parseDistinguishedName(dn: string): ReadonlyMap<string, string> {
   const result = new Map<string, string>();
 
@@ -292,7 +226,7 @@ function parseDistinguishedName(dn: string): ReadonlyMap<string, string> {
   return result;
 }
 
-/** Значение целиком в кавычках (`"..."`) — снимаем внешнюю пару и схлопываем `""` внутри в одну кавычку. */
+/** RFC 2253 quoted-string (`"ООО ""Ромашка"""`) — снимаем внешние кавычки, схлопываем `""` в одну. */
 function unquoteDnValue(value: string): string {
   if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
     return value.slice(1, -1).replace(/""/g, '"');
