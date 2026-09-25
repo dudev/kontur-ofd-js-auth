@@ -1,0 +1,11 @@
+# https://megalinter.io/latest/config-file/
+APPLY_FIXES: none
+FILTER_REGEX_EXCLUDE: "(node_modules/|dist/|coverage/|megalinter-reports/)"
+DISABLE:
+  # Noisy on Russian-language commit messages/docs without a custom dictionary.
+  - SPELL
+  # Low value on a small, young repo — mostly flags intentionally similar test fixtures.
+  - COPYPASTE
+  # Own ESLint job already covers this with project-specific config (typescript-eslint strict).
+  - TYPESCRIPT_ES
+PRINT_ALPACA: false

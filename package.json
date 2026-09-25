@@ -1,0 +1,38 @@
+{
+  "name": "@dudev/kontur-ofd-js-auth",
+  "version": "0.1.0",
+  "description": "Browser-side ГОСТ crypto companion for Kontur.OFD certificate-based authentication (КриптоПро ЭЦП Browser plug-in) — not a REST client, see README",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "dudev",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "@types/node": "^20.17.16",
+    "@vitest/coverage-v8": "^4.1.11",
+    "eslint": "^9.20.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.23.0",
+    "vitest": "^4.1.11"
+  }
+}
