@@ -12,9 +12,10 @@ import type { CadesCertificate, CadesPlugin, CadesStore } from './cadesplugin.ty
 export class WindowCadesPluginAdapter implements CryptoProAdapter {
   /**
    * Возвращает только сертификаты, пригодные для аутентификации по ЭП в Контур.ОФД (ГОСТ-алгоритм,
-   * не просрочен, есть закрытый ключ) — непригодные тихо пропускаются, а не попадают в список
-   * потребителю на выбор. См. `docs/roadmap.md`, открытый вопрос 2 — живой тест показал, что
-   * реальное хранилище пользователя обычно содержит и непригодные сертификаты (RSA, служебные).
+   * не просрочен и не вне PrivateKeyUsagePeriod, есть закрытый ключ, KeyUsage допускает обмен
+   * ключом) — непригодные тихо пропускаются, а не попадают в список потребителю на выбор. См.
+   * `docs/roadmap.md`, открытый вопрос 2 — живой тест показал, что реальное хранилище пользователя
+   * обычно содержит и непригодные сертификаты (RSA, служебные, просроченные).
    */
   async listCertificateThumbprints(): Promise<readonly string[]> {
     return this.withStore(async (store) => {
@@ -185,18 +186,75 @@ async function isWithinValidityPeriod(certificate: CadesCertificate): Promise<bo
   return new Date(validFrom).getTime() <= now && now <= new Date(validTo).getTime();
 }
 
+/**
+ * Необязательное расширение X.509 (OID `2.5.29.16`) — своё, более узкое окно действия именно для
+ * приватного ключа, может быть уже общего срока сертификата. У большинства сертификатов этого
+ * расширения нет вообще, и официальная документация не описывает поведение чтения в этом случае —
+ * поэтому читаем `From`/`To` независимо друг от друга и трактуем отсутствие/ошибку/`null` как
+ * «дополнительного ограничения нет», а не как непригодность сертификата (так же поступает
+ * официальный демо-код CryptoPro, оборачивая оба чтения в try/catch).
+ */
+async function isWithinPrivateKeyUsagePeriod(certificate: CadesCertificate): Promise<boolean> {
+  const now = Date.now();
+  const [from, to] = await Promise.all([
+    readOptionalDate(() => certificate.PrivateKeyUsagePeriodFrom),
+    readOptionalDate(() => certificate.PrivateKeyUsagePeriodTo),
+  ]);
+
+  if (from !== null && now < from.getTime()) return false;
+  if (to !== null && now > to.getTime()) return false;
+
+  return true;
+}
+
+async function readOptionalDate(read: () => Promise<string | null>): Promise<Date | null> {
+  try {
+    const value = await read();
+    if (value === null) return null;
+
+    const date = new Date(value);
+
+    return Number.isNaN(date.getTime()) ? null : date;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * KeyUsage (OID `2.5.29.15`) — тоже необязательное расширение; при его отсутствии (`IsPresent ===
+ * false`) не считаем это ограничением, та же логика, что для PrivateKeyUsagePeriod выше. Когда
+ * расширение есть, требуем keyEncipherment ИЛИ keyAgreement — оба назначения X.509 годятся для
+ * обмена ключом при расшифровке, а какое именно использует конкретный ГОСТ-сертификат, источники
+ * CryptoPro не специфицируют.
+ */
+async function allowsKeyExchange(certificate: CadesCertificate): Promise<boolean> {
+  const keyUsage = await certificate.KeyUsage();
+  if (!(await keyUsage.IsPresent)) return true;
+
+  const [keyEncipherment, keyAgreement] = await Promise.all([
+    keyUsage.IsKeyEnciphermentEnabled,
+    keyUsage.IsKeyAgreementEnabled,
+  ]);
+
+  return keyEncipherment || keyAgreement;
+}
+
 /** Пустой массив — сертификат пригоден для аутентификации по ЭП в Контур.ОФД. */
 async function unsuitabilityReasons(certificate: CadesCertificate): Promise<readonly string[]> {
-  const [isGost, isValidPeriod, hasPrivateKey] = await Promise.all([
+  const [isGost, isValidPeriod, hasPrivateKey, isWithinKeyPeriod, canExchangeKey] = await Promise.all([
     isGostCertificate(certificate),
     isWithinValidityPeriod(certificate),
     certificate.HasPrivateKey(),
+    isWithinPrivateKeyUsagePeriod(certificate),
+    allowsKeyExchange(certificate),
   ]);
 
   const reasons: string[] = [];
   if (!isGost) reasons.push('does not use a GOST public-key algorithm supported by Kontur.OFD (ГОСТ Р 34.10-2001/2012)');
   if (!isValidPeriod) reasons.push('is expired or not yet valid');
   if (!hasPrivateKey) reasons.push('has no private key available in the current user\'s store');
+  if (!isWithinKeyPeriod) reasons.push('is outside its PrivateKeyUsagePeriod (private key itself has expired separately from the certificate)');
+  if (!canExchangeKey) reasons.push('KeyUsage does not permit key encipherment or key agreement (likely a signature-only certificate)');
 
   return reasons;
 }

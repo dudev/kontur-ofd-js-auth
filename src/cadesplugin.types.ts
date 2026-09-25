@@ -35,8 +35,21 @@ export interface CadesPublicKey {
 }
 
 /**
- * `CAdESCOM.Certificate` (тип библиотеки — `CPCertificate`). `PublicKey` — метод, не свойство (в
- * отличие от `Thumbprint`/`ValidFromDate`/`ValidToDate`) — так задокументировано в
+ * `CAdESCOM.KeyUsage` (`docs.cryptopro.ru/cades/reference/cadescom/cadescom_class/keyusage`) —
+ * декодированное расширение X.509 KeyUsage (OID `2.5.29.15`); разбирать DER-битовую строку вручную
+ * не нужно, плагин уже даёт именованные булевы флаги. На практике (проверено на реальном плагине
+ * 2026-09-25) `Is*Enabled` резолвятся числом `0`/`1`, не булевым `false`/`true` — для `||`/`if` это
+ * не важно (JS приводит `0`/`1` к falsy/truthy сам), но не полагайтесь на `=== true`.
+ */
+export interface CadesKeyUsage {
+  readonly IsPresent: Promise<boolean>;
+  readonly IsKeyEnciphermentEnabled: Promise<boolean>;
+  readonly IsKeyAgreementEnabled: Promise<boolean>;
+}
+
+/**
+ * `CAdESCOM.Certificate` (тип библиотеки — `CPCertificate`). `PublicKey`/`KeyUsage` — методы, не
+ * свойства (в отличие от `Thumbprint`/`ValidFromDate`/`ValidToDate`) — так задокументировано в
  * `cadescom_class/cpcertificate` и подтверждено официальным демо-кодом (`async_code.js`:
  * `await cert.PublicKey()`, не `await cert.PublicKey`).
  */
@@ -45,8 +58,16 @@ export interface CadesCertificate {
   /** Официальный демо-код оборачивает результат в `new Date(...)` — сам плагин не гарантирует тип. */
   readonly ValidFromDate: Promise<string>;
   readonly ValidToDate: Promise<string>;
+  /**
+   * Необязательное расширение (OID `2.5.29.16`) — есть не у каждого сертификата. Официальная
+   * документация не описывает поведение при его отсутствии; демо-код CryptoPro читает оба свойства
+   * в try/catch и получает `null`, если расширения нет — поэтому тип включает `null`.
+   */
+  readonly PrivateKeyUsagePeriodFrom: Promise<string | null>;
+  readonly PrivateKeyUsagePeriodTo: Promise<string | null>;
   Export(encoding: number): Promise<string>;
   PublicKey(): Promise<CadesPublicKey>;
+  KeyUsage(): Promise<CadesKeyUsage>;
   /** Проверяет только наличие `CERT_KEY_PROV_INFO_PROP_ID` — не гарантирует, что контейнер ключа реально доступен. */
   HasPrivateKey(): Promise<boolean>;
 }

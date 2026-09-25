@@ -81,7 +81,22 @@
       }
       const validTo = await c.ValidToDate;
       const hasPrivateKey = await c.HasPrivateKey();
-      result.push({ thumbprint, subject, algorithmOid, validTo, hasPrivateKey });
+      let privateKeyUsageTo;
+      try {
+        privateKeyUsageTo = await c.PrivateKeyUsagePeriodTo;
+      } catch (e) {
+        privateKeyUsageTo = 'threw: ' + (e?.message ?? String(e));
+      }
+      let keyUsage;
+      try {
+        const ku = await c.KeyUsage();
+        keyUsage = (await ku.IsPresent)
+          ? { keyEncipherment: await ku.IsKeyEnciphermentEnabled, keyAgreement: await ku.IsKeyAgreementEnabled }
+          : 'not present';
+      } catch (e) {
+        keyUsage = 'threw: ' + (e?.message ?? String(e));
+      }
+      result.push({ thumbprint, subject, algorithmOid, validTo, hasPrivateKey, privateKeyUsageTo, keyUsage });
     }
     await store.Close();
     return result;
@@ -179,6 +194,8 @@
         algorithmOid: c.algorithmOid,
         validTo: c.validTo,
         hasPrivateKey: c.hasPrivateKey,
+        privateKeyUsageTo: c.privateKeyUsageTo,
+        keyUsage: c.keyUsage,
         includedByAdapter: filteredSet.has(c.thumbprint) ? '✅' : '❌',
       }));
       append(`Все сертификаты хранилища (${all.length}) vs listCertificateThumbprints() (${filtered.length})`, table);

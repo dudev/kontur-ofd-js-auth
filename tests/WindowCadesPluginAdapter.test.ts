@@ -5,6 +5,12 @@ import type { CadesCertificate, CadesCertificates, CadesEnvelopedData, CadesPlug
 const GOST_2012_256_OID = '1.2.643.7.1.1.1.1';
 const RSA_OID = '1.2.840.113549.1.1.1';
 
+interface FakeKeyUsageSpec {
+  readonly isPresent: boolean;
+  readonly keyEncipherment?: boolean;
+  readonly keyAgreement?: boolean;
+}
+
 interface FakeCertSpec {
   readonly thumbprint: string;
   readonly base64?: string;
@@ -12,6 +18,9 @@ interface FakeCertSpec {
   readonly validFrom?: string;
   readonly validTo?: string;
   readonly hasPrivateKey?: boolean;
+  readonly privateKeyUsageFrom?: string | null;
+  readonly privateKeyUsageTo?: string | null;
+  readonly keyUsage?: FakeKeyUsageSpec;
 }
 
 function makeCertificate(spec: FakeCertSpec): CadesCertificate {
@@ -20,9 +29,18 @@ function makeCertificate(spec: FakeCertSpec): CadesCertificate {
     Export: vi.fn().mockResolvedValue(spec.base64 ?? `EXPORTED-${spec.thumbprint}`),
     ValidFromDate: Promise.resolve(spec.validFrom ?? '2020-01-01T00:00:00.000Z'),
     ValidToDate: Promise.resolve(spec.validTo ?? '2099-01-01T00:00:00.000Z'),
+    // По умолчанию у сертификата нет ни того, ни другого расширения — большинство реальных
+    // сертификатов их и не имеют, это подтверждённое поведение "нет ограничения", не хак теста.
+    PrivateKeyUsagePeriodFrom: Promise.resolve(spec.privateKeyUsageFrom ?? null),
+    PrivateKeyUsagePeriodTo: Promise.resolve(spec.privateKeyUsageTo ?? null),
     HasPrivateKey: vi.fn().mockResolvedValue(spec.hasPrivateKey ?? true),
     PublicKey: vi.fn().mockResolvedValue({
       Algorithm: Promise.resolve({ Value: Promise.resolve(spec.algorithmOid ?? GOST_2012_256_OID) }),
+    }),
+    KeyUsage: vi.fn().mockResolvedValue({
+      IsPresent: Promise.resolve(spec.keyUsage?.isPresent ?? false),
+      IsKeyEnciphermentEnabled: Promise.resolve(spec.keyUsage?.keyEncipherment ?? false),
+      IsKeyAgreementEnabled: Promise.resolve(spec.keyUsage?.keyAgreement ?? false),
     }),
   };
 }
@@ -151,6 +169,9 @@ describe('WindowCadesPluginAdapter', () => {
         { thumbprint: 'EXPIRED', validTo: '2020-01-01T00:00:00.000Z' },
         { thumbprint: 'NOT-YET-VALID', validFrom: '2099-01-01T00:00:00.000Z' },
         { thumbprint: 'NO-PRIVATE-KEY', hasPrivateKey: false },
+        { thumbprint: 'PRIVATE-KEY-EXPIRED', privateKeyUsageTo: '2020-01-01T00:00:00.000Z' },
+        { thumbprint: 'PRIVATE-KEY-NOT-YET-VALID', privateKeyUsageFrom: '2099-01-01T00:00:00.000Z' },
+        { thumbprint: 'SIGNATURE-ONLY', keyUsage: { isPresent: true, keyEncipherment: false, keyAgreement: false } },
       ]);
       stubWindowCadesplugin(makeCadesplugin({ store }));
       const adapter = new WindowCadesPluginAdapter();
@@ -158,6 +179,33 @@ describe('WindowCadesPluginAdapter', () => {
       const thumbprints = await adapter.listCertificateThumbprints();
 
       expect(thumbprints).toEqual(['GOOD']);
+    });
+
+    it('does not treat an absent PrivateKeyUsagePeriod or KeyUsage extension as a restriction', async () => {
+      const store = makeStore([
+        { thumbprint: 'NO-EXTENSIONS', privateKeyUsageFrom: null, privateKeyUsageTo: null, keyUsage: { isPresent: false } },
+        { thumbprint: 'KEY-AGREEMENT-ONLY', keyUsage: { isPresent: true, keyEncipherment: false, keyAgreement: true } },
+      ]);
+      stubWindowCadesplugin(makeCadesplugin({ store }));
+      const adapter = new WindowCadesPluginAdapter();
+
+      const thumbprints = await adapter.listCertificateThumbprints();
+
+      expect(thumbprints).toEqual(['NO-EXTENSIONS', 'KEY-AGREEMENT-ONLY']);
+    });
+
+    it('treats a PrivateKeyUsagePeriod read that throws the same as an absent extension', async () => {
+      const store = makeStore([{ thumbprint: 'THROWS-ON-READ' }]);
+      const certificate = await (await store.Certificates).Item(1);
+      (certificate as { PrivateKeyUsagePeriodFrom: Promise<string | null> }).PrivateKeyUsagePeriodFrom = Promise.reject(
+        new Error('В сертификате отсутствует расширение 2.5.29.16'),
+      );
+      stubWindowCadesplugin(makeCadesplugin({ store }));
+      const adapter = new WindowCadesPluginAdapter();
+
+      const thumbprints = await adapter.listCertificateThumbprints();
+
+      expect(thumbprints).toEqual(['THROWS-ON-READ']);
     });
   });
 
