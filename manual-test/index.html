@@ -6,7 +6,7 @@
   Запуск:
     npm run build              # собрать dist/, который импортирует эта страница
     npx http-server -p 8935 .  # НЕ python -m http.server — отдаёт .js как text/plain,
-                                # это ломает <script type="module">
+                                # это ломает загрузку ES-модулей
     открыть http://127.0.0.1:.../manual-test/index.html
 
   См. docs/roadmap.md — что из проверенного здесь ещё не закрыто.
@@ -15,6 +15,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8" />
+<meta name="description" content="Ручной тест WindowCadesPluginAdapter против КриптоПро ЭЦП Browser plug-in" />
 <title>kontur-ofd-js-auth — ручной тест WindowCadesPluginAdapter</title>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; line-height: 1.5; }
@@ -25,6 +26,7 @@
   dialog { padding: 0; border: none; border-radius: 8px; max-width: 480px; width: 90%; }
   dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
   #cert-dialog-body { padding: 1rem 1.25rem; }
+  #cert-dialog-body h3 { margin-top: 0; }
   .cert-option { display: block; width: 100%; text-align: left; margin: 0 0 0.5rem; padding: 0.5rem 0.75rem; }
 </style>
 </head>
@@ -33,22 +35,22 @@
 <p class="status" id="status">Загрузка плагина…</p>
 
 <!-- Диалог выбора — не часть библиотеки, лишь пример потребительского UI поверх listCertificates(). -->
-<button id="btn-choose-cert">Выбрать сертификат для тестов 2-3 (диалог)</button>
+<button type="button" id="btn-choose-cert">Выбрать сертификат для тестов 2-3 (диалог)</button>
 <p id="selected-cert">Сертификат не выбран — будет использован первый подходящий</p>
 
 <dialog id="cert-dialog">
   <div id="cert-dialog-body">
-    <h3 style="margin-top: 0;">Выберите сертификат</h3>
+    <h3>Выберите сертификат</h3>
     <div id="cert-dialog-list">Загрузка…</div>
-    <button id="cert-dialog-cancel">Отмена</button>
+    <button type="button" id="cert-dialog-cancel">Отмена</button>
   </div>
 </dialog>
 
-<button id="btn-list">1. Список сертификатов (listCertificates)</button>
-<button id="btn-export">2. Экспорт выбранного сертификата (getCertificateBase64)</button>
-<button id="btn-roundtrip">3. Encrypt (сырой CAdESCOM) → Decrypt (наш адаптер) round-trip</button>
-<button id="btn-compare">4. Все сертификаты хранилища vs отфильтрованный список</button>
-<button id="btn-unsuitable">5. getCertificateBase64 на непригодном сертификате (ожидаем ошибку)</button>
+<button type="button" id="btn-list">1. Список сертификатов (listCertificates)</button>
+<button type="button" id="btn-export">2. Экспорт выбранного сертификата (getCertificateBase64)</button>
+<button type="button" id="btn-roundtrip">3. Encrypt (сырой CAdESCOM) → Decrypt (наш адаптер) round-trip</button>
+<button type="button" id="btn-compare">4. Все сертификаты хранилища vs отфильтрованный список</button>
+<button type="button" id="btn-unsuitable">5. getCertificateBase64 на непригодном сертификате (ожидаем ошибку)</button>
 
 <pre id="log"></pre>
 
