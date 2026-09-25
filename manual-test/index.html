@@ -1,0 +1,305 @@
+<!--
+  Ручной тест WindowCadesPluginAdapter против настоящего КриптоПро ЭЦП Browser plug-in.
+  Требует: установленный плагин + CSP + хотя бы один ГОСТ-сертификат в хранилище текущего
+  пользователя, браузер с поддержкой плагина (не headless).
+
+  Запуск:
+    npm run build              # собрать dist/, который импортирует эта страница
+    npx http-server -p 8935 .  # НЕ python -m http.server — отдаёт .js как text/plain,
+                                # это ломает <script type="module">
+    открыть http://127.0.0.1:.../manual-test/index.html
+
+  См. docs/roadmap.md — что из проверенного здесь ещё не закрыто.
+-->
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>kontur-ofd-js-auth — ручной тест WindowCadesPluginAdapter</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; line-height: 1.5; }
+  button { display: block; margin: 0.5rem 0; padding: 0.5rem 1rem; }
+  pre { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; word-break: break-all; }
+  .status { font-weight: bold; }
+  #selected-cert { color: #555; margin: 0.25rem 0 1rem; }
+  dialog { padding: 0; border: none; border-radius: 8px; max-width: 480px; width: 90%; }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+  #cert-dialog-body { padding: 1rem 1.25rem; }
+  .cert-option { display: block; width: 100%; text-align: left; margin: 0 0 0.5rem; padding: 0.5rem 0.75rem; }
+</style>
+</head>
+<body>
+<h1>kontur-ofd-js-auth — ручной тест</h1>
+<p class="status" id="status">Загрузка плагина…</p>
+
+<!-- Диалог выбора — не часть библиотеки, лишь пример потребительского UI поверх listCertificates(). -->
+<button id="btn-choose-cert">Выбрать сертификат для тестов 2-3 (диалог)</button>
+<p id="selected-cert">Сертификат не выбран — будет использован первый подходящий</p>
+
+<dialog id="cert-dialog">
+  <div id="cert-dialog-body">
+    <h3 style="margin-top: 0;">Выберите сертификат</h3>
+    <div id="cert-dialog-list">Загрузка…</div>
+    <button id="cert-dialog-cancel">Отмена</button>
+  </div>
+</dialog>
+
+<button id="btn-list">1. Список сертификатов (listCertificates)</button>
+<button id="btn-export">2. Экспорт выбранного сертификата (getCertificateBase64)</button>
+<button id="btn-roundtrip">3. Encrypt (сырой CAdESCOM) → Decrypt (наш адаптер) round-trip</button>
+<button id="btn-compare">4. Все сертификаты хранилища vs отфильтрованный список</button>
+<button id="btn-unsuitable">5. getCertificateBase64 на непригодном сертификате (ожидаем ошибку)</button>
+
+<pre id="log"></pre>
+
+<script src="https://www.cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
+<script type="module">
+  import { WindowCadesPluginAdapter } from '../dist/index.js';
+
+  const log = document.getElementById('log');
+  const status = document.getElementById('status');
+  const append = (label, value) => {
+    log.textContent += `\n=== ${label} ===\n${typeof value === 'string' ? value : JSON.stringify(value, null, 2)}\n`;
+    console.log(label, value);
+  };
+  const appendError = (label, error) => {
+    log.textContent += `\n=== ${label} (ERROR) ===\n${error?.stack ?? error}\n`;
+    console.error(label, error);
+  };
+
+  const adapter = new WindowCadesPluginAdapter();
+  window.__adapter = adapter; // for interactive poking from devtools/automation
+
+  let lastThumbprint = null;
+
+  // Сырой обход хранилища в обход адаптера — чтобы увидеть и непригодные сертификаты тоже.
+  async function describeAllCertificates() {
+    const store = await window.cadesplugin.CreateObjectAsync('CAdESCOM.Store');
+    await store.Open(
+      window.cadesplugin.CAPICOM_CURRENT_USER_STORE,
+      window.cadesplugin.CAPICOM_MY_STORE,
+      window.cadesplugin.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED,
+    );
+    const certs = await store.Certificates;
+    const count = await certs.Count;
+    const result = [];
+    for (let i = 1; i <= count; i++) {
+      const c = await certs.Item(i);
+      const thumbprint = (await c.Thumbprint).trim().toUpperCase();
+      const subject = await c.SubjectName;
+      let algorithmOid;
+      try {
+        const publicKey = await c.PublicKey();
+        algorithmOid = await (await publicKey.Algorithm).Value;
+      } catch (e) {
+        algorithmOid = 'ERR: ' + (e?.message ?? String(e));
+      }
+      const validTo = await c.ValidToDate;
+      const hasPrivateKey = await c.HasPrivateKey();
+      let privateKeyUsageTo;
+      try {
+        privateKeyUsageTo = await c.PrivateKeyUsagePeriodTo;
+      } catch (e) {
+        privateKeyUsageTo = 'threw: ' + (e?.message ?? String(e));
+      }
+      let keyUsage;
+      try {
+        const ku = await c.KeyUsage();
+        keyUsage = (await ku.IsPresent)
+          ? { keyEncipherment: await ku.IsKeyEnciphermentEnabled, keyAgreement: await ku.IsKeyAgreementEnabled }
+          : 'not present';
+      } catch (e) {
+        keyUsage = 'threw: ' + (e?.message ?? String(e));
+      }
+      result.push({ thumbprint, subject, algorithmOid, validTo, hasPrivateKey, privateKeyUsageTo, keyUsage });
+    }
+    await store.Close();
+    return result;
+  }
+
+  window.cadesplugin.then(
+    () => { status.textContent = 'Плагин загружен ✅'; },
+    (err) => { status.textContent = 'Плагин НЕ загрузился ❌'; appendError('plugin load', err); },
+  );
+
+  const selectedCertEl = document.getElementById('selected-cert');
+  let selectedCert = null;
+
+  function formatCertLabel(cert) {
+    const parts = [cert.ownerName ?? '(без CN)'];
+    if (cert.organization) parts.push(cert.organization);
+    parts.push('до ' + new Date(cert.validTo).toLocaleDateString('ru-RU'));
+    return `${parts.join(' — ')} (…${cert.thumbprint.slice(-8)})`;
+  }
+
+  function renderSelectedCert() {
+    selectedCertEl.textContent = selectedCert
+      ? `Выбран сертификат: ${formatCertLabel(selectedCert)}`
+      : 'Сертификат не выбран — будет использован первый подходящий';
+  }
+
+  const certDialog = document.getElementById('cert-dialog');
+  const certDialogList = document.getElementById('cert-dialog-list');
+
+  document.getElementById('btn-choose-cert').addEventListener('click', async () => {
+    certDialogList.textContent = 'Загрузка списка сертификатов…';
+    certDialog.showModal();
+    try {
+      // Ровно то, что реально предложил бы потребитель — без обхода адаптера напрямую.
+      const certificates = await adapter.listCertificates();
+
+      certDialogList.textContent = '';
+      if (certificates.length === 0) {
+        certDialogList.textContent = 'В хранилище нет ни одного подходящего сертификата.';
+        return;
+      }
+      for (const cert of certificates) {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'cert-option';
+        const details = [cert.inn ? `ИНН ${cert.inn}` : null, cert.ogrn ? `ОГРН(ИП) ${cert.ogrn}` : null, cert.issuerName ? `издан: ${cert.issuerName}` : null]
+          .filter(Boolean)
+          .join(', ');
+        option.innerHTML = `${formatCertLabel(cert)}${details ? `<br><small>${details}</small>` : ''}`;
+        option.addEventListener('click', () => {
+          lastThumbprint = cert.thumbprint;
+          selectedCert = cert;
+          renderSelectedCert();
+          certDialog.close();
+        });
+        certDialogList.appendChild(option);
+      }
+    } catch (e) {
+      certDialogList.textContent = 'Ошибка получения списка сертификатов: ' + (e?.message ?? String(e));
+    }
+  });
+
+  document.getElementById('cert-dialog-cancel').addEventListener('click', () => certDialog.close());
+
+  document.getElementById('btn-list').addEventListener('click', async () => {
+    try {
+      const certificates = await adapter.listCertificates();
+      append('listCertificates', certificates);
+      if (!lastThumbprint) {
+        lastThumbprint = certificates[0]?.thumbprint ?? null;
+        selectedCert = certificates[0] ?? null;
+        renderSelectedCert();
+      }
+    } catch (e) {
+      appendError('listCertificates', e);
+    }
+  });
+
+  document.getElementById('btn-export').addEventListener('click', async () => {
+    try {
+      if (!lastThumbprint) {
+        const certificates = await adapter.listCertificates();
+        lastThumbprint = certificates[0]?.thumbprint ?? null;
+        selectedCert = certificates[0] ?? null;
+        renderSelectedCert();
+      }
+      if (!lastThumbprint) { append('getCertificateBase64', 'No certificates found'); return; }
+      const base64 = await adapter.getCertificateBase64(lastThumbprint);
+      append(`getCertificateBase64(${lastThumbprint})`, base64.slice(0, 80) + '... (' + base64.length + ' chars)');
+    } catch (e) {
+      appendError('getCertificateBase64', e);
+    }
+  });
+
+  document.getElementById('btn-roundtrip').addEventListener('click', async () => {
+    try {
+      if (!lastThumbprint) {
+        const certificates = await adapter.listCertificates();
+        lastThumbprint = certificates[0]?.thumbprint ?? null;
+        selectedCert = certificates[0] ?? null;
+        renderSelectedCert();
+      }
+      if (!lastThumbprint) { append('roundtrip', 'No certificates found'); return; }
+      append('using thumbprint', lastThumbprint);
+
+      // Raw CAdESCOM Encrypt — not shipped in the adapter, only to manufacture a CMS envelope to test Decrypt against.
+      const store = await window.cadesplugin.CreateObjectAsync('CAdESCOM.Store');
+      await store.Open(
+        window.cadesplugin.CAPICOM_CURRENT_USER_STORE,
+        window.cadesplugin.CAPICOM_MY_STORE,
+        window.cadesplugin.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED,
+      );
+      const certs = await store.Certificates;
+      const count = await certs.Count;
+      let certificate = null;
+      for (let i = 1; i <= count; i++) {
+        const c = await certs.Item(i);
+        const thumb = (await c.Thumbprint).trim().toUpperCase();
+        if (thumb === lastThumbprint) { certificate = c; break; }
+      }
+      if (!certificate) throw new Error('Certificate not found again for encrypt step');
+
+      const plaintext = 'Hello from kontur-ofd-js-auth manual test, ' + new Date().toISOString();
+      const plaintextBase64 = btoa(unescape(encodeURIComponent(plaintext)));
+
+      const envelopedData = await window.cadesplugin.CreateObjectAsync('CAdESCOM.CPEnvelopedData');
+      await envelopedData.propset_ContentEncoding(window.cadesplugin.CADESCOM_BASE64_TO_BINARY);
+      await envelopedData.propset_Content(plaintextBase64);
+      const recipients = await envelopedData.Recipients;
+      await recipients.Add(certificate);
+      const encryptedBase64 = await envelopedData.Encrypt();
+
+      await store.Close();
+
+      append('plaintext', plaintext);
+      append('encryptedBase64 (first 80 chars)', String(encryptedBase64).slice(0, 80) + '...');
+
+      // Now decrypt via OUR adapter — this is the actual thing under test.
+      const decryptedBase64 = await adapter.decryptEncryptedKey(encryptedBase64);
+      const decryptedText = decodeURIComponent(escape(atob(decryptedBase64)));
+      append('decrypted via WindowCadesPluginAdapter', decryptedText);
+      append('ROUND-TRIP RESULT', decryptedText === plaintext ? 'MATCH ✅' : 'MISMATCH ❌');
+    } catch (e) {
+      appendError('roundtrip', e);
+    }
+  });
+
+  document.getElementById('btn-compare').addEventListener('click', async () => {
+    try {
+      const [all, filtered] = await Promise.all([describeAllCertificates(), adapter.listCertificates()]);
+      const filteredSet = new Set(filtered.map((c) => c.thumbprint));
+      const table = all.map((c) => ({
+        thumbprint: c.thumbprint,
+        subject: c.subject.slice(0, 40),
+        algorithmOid: c.algorithmOid,
+        validTo: c.validTo,
+        hasPrivateKey: c.hasPrivateKey,
+        privateKeyUsageTo: c.privateKeyUsageTo,
+        keyUsage: c.keyUsage,
+        includedByAdapter: filteredSet.has(c.thumbprint) ? '✅' : '❌',
+      }));
+      append(`Все сертификаты хранилища (${all.length}) vs listCertificates() (${filtered.length})`, table);
+    } catch (e) {
+      appendError('compare', e);
+    }
+  });
+
+  document.getElementById('btn-unsuitable').addEventListener('click', async () => {
+    try {
+      const [all, filtered] = await Promise.all([describeAllCertificates(), adapter.listCertificates()]);
+      const filteredSet = new Set(filtered.map((c) => c.thumbprint));
+      const unsuitable = all.find((c) => !filteredSet.has(c.thumbprint));
+      if (!unsuitable) {
+        append('getCertificateBase64 on unsuitable cert', 'Все сертификаты в хранилище пригодны — нечего проверить');
+        return;
+      }
+      append('using unsuitable thumbprint', `${unsuitable.thumbprint} (${unsuitable.subject.slice(0, 40)})`);
+
+      try {
+        await adapter.getCertificateBase64(unsuitable.thumbprint);
+        append('getCertificateBase64 on unsuitable cert', 'ОШИБКА ТЕСТА: ожидалось исключение, но его не было');
+      } catch (e) {
+        append('getCertificateBase64 threw as expected', e.message);
+      }
+    } catch (e) {
+      appendError('unsuitable certificate test setup', e);
+    }
+  });
+</script>
+</body>
+</html>
