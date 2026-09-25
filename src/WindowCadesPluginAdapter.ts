@@ -2,13 +2,12 @@ import type { CryptoProAdapter } from './CryptoProAdapter.js';
 import type { CadesCertificate, CadesPlugin, CadesStore } from './cadesplugin.types.js';
 
 /**
- * `CryptoProAdapter` поверх `window.cadesplugin` (КриптоПро ЭЦП Browser plug-in). Собрано и
- * проверено против официальной документации CryptoPro и демо-примеров (`docs.cryptopro.ru/cades/
- * plugin/*`, `cadesplugin_api.js`, `async_code.js` с cryptopro.ru) — **не запускалось на реальном
- * стенде** с настоящим плагином/токеном/`EncryptedKey` от Контур.ОФД. См. `docs/roadmap.md`,
- * открытый вопрос 1 — перед первым реальным использованием стоит один раз пройти весь путь на
- * тестовой площадке (`Endpoints.rst`, бесплатный доступ) и свериться, что `Decrypt()` действительно
- * находит нужный ключ без явного указания сертификата.
+ * `CryptoProAdapter` поверх `window.cadesplugin` (КриптоПро ЭЦП Browser plug-in). Собрано против
+ * официальной документации CryptoPro и демо-примеров (`docs.cryptopro.ru/cades/plugin/*`,
+ * `cadesplugin_api.js`, `async_code.js` с cryptopro.ru) и проверено 2026-09-25 на реальном стенде
+ * (`manual-test/index.html`) — все три метода отработали на настоящем плагине и хранилище
+ * сертификатов, включая `Decrypt()` без явного указания сертификата. См. `docs/roadmap.md`,
+ * открытый вопрос 1 — что именно проверено и что осталось непроверенным.
  */
 export class WindowCadesPluginAdapter implements CryptoProAdapter {
   async listCertificateThumbprints(): Promise<readonly string[]> {

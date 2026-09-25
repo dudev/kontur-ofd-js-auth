@@ -1,0 +1,139 @@
+<!--
+  Ручной тест WindowCadesPluginAdapter против настоящего КриптоПро ЭЦП Browser plug-in.
+  Требует: установленный плагин + CSP + хотя бы один ГОСТ-сертификат в хранилище текущего
+  пользователя, браузер с поддержкой плагина (не headless).
+
+  Запуск:
+    npm run build              # собрать dist/, который импортирует эта страница
+    npx http-server -p 8935 .  # НЕ python -m http.server — отдаёт .js как text/plain,
+                                # это ломает <script type="module">
+    открыть http://127.0.0.1:.../manual-test/index.html
+
+  См. docs/roadmap.md, открытый вопрос 1 — что уже проверено этой страницей 2026-09-25.
+-->
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>kontur-ofd-js-auth — ручной тест WindowCadesPluginAdapter</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; line-height: 1.5; }
+  button { display: block; margin: 0.5rem 0; padding: 0.5rem 1rem; }
+  pre { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; word-break: break-all; }
+  .status { font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>kontur-ofd-js-auth — ручной тест</h1>
+<p class="status" id="status">Загрузка плагина…</p>
+
+<button id="btn-list">1. Список сертификатов (listCertificateThumbprints)</button>
+<button id="btn-export">2. Экспорт первого сертификата (getCertificateBase64)</button>
+<button id="btn-roundtrip">3. Encrypt (сырой CAdESCOM) → Decrypt (наш адаптер) round-trip</button>
+
+<pre id="log"></pre>
+
+<script src="https://www.cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
+<script type="module">
+  import { WindowCadesPluginAdapter } from '../dist/index.js';
+
+  const log = document.getElementById('log');
+  const status = document.getElementById('status');
+  const append = (label, value) => {
+    log.textContent += `\n=== ${label} ===\n${typeof value === 'string' ? value : JSON.stringify(value, null, 2)}\n`;
+    console.log(label, value);
+  };
+  const appendError = (label, error) => {
+    log.textContent += `\n=== ${label} (ERROR) ===\n${error?.stack ?? error}\n`;
+    console.error(label, error);
+  };
+
+  const adapter = new WindowCadesPluginAdapter();
+  window.__adapter = adapter; // for interactive poking from devtools/automation
+
+  let lastThumbprint = null;
+
+  window.cadesplugin.then(
+    () => { status.textContent = 'Плагин загружен ✅'; },
+    (err) => { status.textContent = 'Плагин НЕ загрузился ❌'; appendError('plugin load', err); },
+  );
+
+  document.getElementById('btn-list').addEventListener('click', async () => {
+    try {
+      const thumbprints = await adapter.listCertificateThumbprints();
+      append('listCertificateThumbprints', thumbprints);
+      lastThumbprint = thumbprints[0] ?? null;
+    } catch (e) {
+      appendError('listCertificateThumbprints', e);
+    }
+  });
+
+  document.getElementById('btn-export').addEventListener('click', async () => {
+    try {
+      if (!lastThumbprint) {
+        const thumbprints = await adapter.listCertificateThumbprints();
+        lastThumbprint = thumbprints[0] ?? null;
+      }
+      if (!lastThumbprint) { append('getCertificateBase64', 'No certificates found'); return; }
+      const base64 = await adapter.getCertificateBase64(lastThumbprint);
+      append(`getCertificateBase64(${lastThumbprint})`, base64.slice(0, 80) + '... (' + base64.length + ' chars)');
+    } catch (e) {
+      appendError('getCertificateBase64', e);
+    }
+  });
+
+  document.getElementById('btn-roundtrip').addEventListener('click', async () => {
+    try {
+      if (!lastThumbprint) {
+        const thumbprints = await adapter.listCertificateThumbprints();
+        lastThumbprint = thumbprints[0] ?? null;
+      }
+      if (!lastThumbprint) { append('roundtrip', 'No certificates found'); return; }
+      append('using thumbprint', lastThumbprint);
+
+      // Raw CAdESCOM Encrypt — not part of the shipped adapter (Kontur.OFD only ever asks us to
+      // Decrypt an EncryptedKey it produces, we never need to Encrypt in production), but useful
+      // here to manufacture a real CMS envelope to test our Decrypt path against.
+      const store = await window.cadesplugin.CreateObjectAsync('CAdESCOM.Store');
+      await store.Open(
+        window.cadesplugin.CAPICOM_CURRENT_USER_STORE,
+        window.cadesplugin.CAPICOM_MY_STORE,
+        window.cadesplugin.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED,
+      );
+      const certs = await store.Certificates;
+      const count = await certs.Count;
+      let certificate = null;
+      for (let i = 1; i <= count; i++) {
+        const c = await certs.Item(i);
+        const thumb = (await c.Thumbprint).trim().toUpperCase();
+        if (thumb === lastThumbprint) { certificate = c; break; }
+      }
+      if (!certificate) throw new Error('Certificate not found again for encrypt step');
+
+      const plaintext = 'Hello from kontur-ofd-js-auth manual test, ' + new Date().toISOString();
+      const plaintextBase64 = btoa(unescape(encodeURIComponent(plaintext)));
+
+      const envelopedData = await window.cadesplugin.CreateObjectAsync('CAdESCOM.CPEnvelopedData');
+      await envelopedData.propset_ContentEncoding(window.cadesplugin.CADESCOM_BASE64_TO_BINARY);
+      await envelopedData.propset_Content(plaintextBase64);
+      const recipients = await envelopedData.Recipients;
+      await recipients.Add(certificate);
+      const encryptedBase64 = await envelopedData.Encrypt();
+
+      await store.Close();
+
+      append('plaintext', plaintext);
+      append('encryptedBase64 (first 80 chars)', String(encryptedBase64).slice(0, 80) + '...');
+
+      // Now decrypt via OUR adapter — this is the actual thing under test.
+      const decryptedBase64 = await adapter.decryptEncryptedKey(encryptedBase64);
+      const decryptedText = decodeURIComponent(escape(atob(decryptedBase64)));
+      append('decrypted via WindowCadesPluginAdapter', decryptedText);
+      append('ROUND-TRIP RESULT', decryptedText === plaintext ? 'MATCH ✅' : 'MISMATCH ❌');
+    } catch (e) {
+      appendError('roundtrip', e);
+    }
+  });
+</script>
+</body>
+</html>
