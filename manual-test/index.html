@@ -9,8 +9,9 @@
                                 # это ломает <script type="module">
     открыть http://127.0.0.1:.../manual-test/index.html
 
-  См. docs/roadmap.md, открытые вопросы 1 (проверено 2026-09-25) и 2 (фильтрация сертификатов,
-  проверено там же) — что именно проверено этой страницей.
+  См. docs/roadmap.md, открытые вопросы 1 (проверено 2026-09-25) и 2 (фильтрация сертификатов и
+  пример потребительского UI выбора — диалог ниже, проверено там же) — что именно проверено этой
+  страницей.
 -->
 <!doctype html>
 <html lang="ru">
@@ -22,14 +23,37 @@
   button { display: block; margin: 0.5rem 0; padding: 0.5rem 1rem; }
   pre { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; word-break: break-all; }
   .status { font-weight: bold; }
+  #selected-cert { color: #555; margin: 0.25rem 0 1rem; }
+  dialog { padding: 0; border: none; border-radius: 8px; max-width: 480px; width: 90%; }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+  #cert-dialog-body { padding: 1rem 1.25rem; }
+  .cert-option { display: block; width: 100%; text-align: left; margin: 0 0 0.5rem; padding: 0.5rem 0.75rem; }
 </style>
 </head>
 <body>
 <h1>kontur-ofd-js-auth — ручной тест</h1>
 <p class="status" id="status">Загрузка плагина…</p>
 
+<!--
+  Диалог выбора сертификата НЕ часть библиотеки — libraries/kontur-ofd-js-auth сознательно не
+  владеет UI выбора (см. docs/roadmap.md, открытый вопрос 2: "какие сертификаты предлагать" решает
+  listCertificateThumbprints(), "как их показать пользователю" — забота потребителя). Этот диалог —
+  пример такого потребительского UI поверх уже отфильтрованного списка, нужен только этой тестовой
+  странице, чтобы проверять сценарии 2 и 3 не только на первом сертификате из списка.
+-->
+<button id="btn-choose-cert">Выбрать сертификат для тестов 2-3 (диалог)</button>
+<p id="selected-cert">Сертификат не выбран — будет использован первый подходящий</p>
+
+<dialog id="cert-dialog">
+  <div id="cert-dialog-body">
+    <h3 style="margin-top: 0;">Выберите сертификат</h3>
+    <div id="cert-dialog-list">Загрузка…</div>
+    <button id="cert-dialog-cancel">Отмена</button>
+  </div>
+</dialog>
+
 <button id="btn-list">1. Список сертификатов (listCertificateThumbprints)</button>
-<button id="btn-export">2. Экспорт первого сертификата (getCertificateBase64)</button>
+<button id="btn-export">2. Экспорт выбранного сертификата (getCertificateBase64)</button>
 <button id="btn-roundtrip">3. Encrypt (сырой CAdESCOM) → Decrypt (наш адаптер) round-trip</button>
 <button id="btn-compare">4. Все сертификаты хранилища vs отфильтрованный список</button>
 <button id="btn-unsuitable">5. getCertificateBase64 на непригодном сертификате (ожидаем ошибку)</button>
@@ -107,11 +131,64 @@
     (err) => { status.textContent = 'Плагин НЕ загрузился ❌'; appendError('plugin load', err); },
   );
 
+  const selectedCertEl = document.getElementById('selected-cert');
+  let selectedSubject = null;
+
+  function renderSelectedCert() {
+    selectedCertEl.textContent = lastThumbprint
+      ? `Выбран сертификат: ${selectedSubject ?? ''} (…${lastThumbprint.slice(-8)})`
+      : 'Сертификат не выбран — будет использован первый подходящий';
+  }
+
+  const certDialog = document.getElementById('cert-dialog');
+  const certDialogList = document.getElementById('cert-dialog-list');
+
+  document.getElementById('btn-choose-cert').addEventListener('click', async () => {
+    certDialogList.textContent = 'Загрузка списка сертификатов…';
+    certDialog.showModal();
+    try {
+      // Диалогу нужны и отпечатки (что реально можно выбрать — решает адаптер), и subject
+      // (чтобы показать пользователю имя, а не голый отпечаток) — describeAllCertificates() уже
+      // делает сырой обход с обоими полями, отфильтровываем его результат по списку адаптера,
+      // а не выбираем сертификаты по своей логике.
+      const [all, filtered] = await Promise.all([describeAllCertificates(), adapter.listCertificateThumbprints()]);
+      const filteredSet = new Set(filtered);
+      const suitable = all.filter((c) => filteredSet.has(c.thumbprint));
+
+      certDialogList.textContent = '';
+      if (suitable.length === 0) {
+        certDialogList.textContent = 'В хранилище нет ни одного подходящего сертификата.';
+        return;
+      }
+      for (const cert of suitable) {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'cert-option';
+        option.textContent = `${cert.subject.slice(0, 60)} — …${cert.thumbprint.slice(-8)}`;
+        option.addEventListener('click', () => {
+          lastThumbprint = cert.thumbprint;
+          selectedSubject = cert.subject;
+          renderSelectedCert();
+          certDialog.close();
+        });
+        certDialogList.appendChild(option);
+      }
+    } catch (e) {
+      certDialogList.textContent = 'Ошибка получения списка сертификатов: ' + (e?.message ?? String(e));
+    }
+  });
+
+  document.getElementById('cert-dialog-cancel').addEventListener('click', () => certDialog.close());
+
   document.getElementById('btn-list').addEventListener('click', async () => {
     try {
       const thumbprints = await adapter.listCertificateThumbprints();
       append('listCertificateThumbprints', thumbprints);
-      lastThumbprint = thumbprints[0] ?? null;
+      if (!lastThumbprint) {
+        lastThumbprint = thumbprints[0] ?? null;
+        selectedSubject = null;
+        renderSelectedCert();
+      }
     } catch (e) {
       appendError('listCertificateThumbprints', e);
     }
@@ -122,6 +199,7 @@
       if (!lastThumbprint) {
         const thumbprints = await adapter.listCertificateThumbprints();
         lastThumbprint = thumbprints[0] ?? null;
+        renderSelectedCert();
       }
       if (!lastThumbprint) { append('getCertificateBase64', 'No certificates found'); return; }
       const base64 = await adapter.getCertificateBase64(lastThumbprint);
@@ -136,6 +214,7 @@
       if (!lastThumbprint) {
         const thumbprints = await adapter.listCertificateThumbprints();
         lastThumbprint = thumbprints[0] ?? null;
+        renderSelectedCert();
       }
       if (!lastThumbprint) { append('roundtrip', 'No certificates found'); return; }
       append('using thumbprint', lastThumbprint);
