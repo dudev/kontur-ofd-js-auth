@@ -5,9 +5,25 @@
  * `EncryptedKey`, см. открытый вопрос 1). Интерфейс остаётся отдельным от реализации, чтобы
  * `certificateAuthFlow.ts` тестировался через мок, без реального плагина/браузера.
  */
+/**
+ * Данные сертификата для показа пользователю в UI выбора — не полный слепок X.509, только то, что
+ * реально нужно человеку, чтобы отличить один сертификат от другого. Поля кроме `thumbprint` и
+ * `validTo` — `null`, если атрибут не найден в DN-строке сертификата (не у всех сертификатов есть
+ * организация/ИНН/ОГРН — например, у личных сертификатов физлица без ИП нет ОГРНИП).
+ */
+export interface CertificateSummary {
+  readonly thumbprint: string;
+  readonly ownerName: string | null;
+  readonly organization: string | null;
+  readonly issuerName: string | null;
+  readonly validTo: Date;
+  readonly inn: string | null;
+  readonly ogrn: string | null;
+}
+
 export interface CryptoProAdapter {
-  /** Отпечатки сертификатов, доступных плагину (обычно — на подключённом токене). */
-  listCertificateThumbprints(): Promise<readonly string[]>;
+  /** Пригодные для аутентификации сертификаты — то, что стоит предложить пользователю на выбор. */
+  listCertificates(): Promise<readonly CertificateSummary[]>;
 
   /** Сертификат электронной подписи в Base-64 — то, что уходит в `authenticate-by-cert` как есть. */
   getCertificateBase64(thumbprint: string): Promise<string>;

@@ -35,10 +35,11 @@
 <p class="status" id="status">Загрузка плагина…</p>
 
 <!--
-  Диалог выбора сертификата НЕ часть библиотеки — libraries/kontur-ofd-js-auth сознательно не
-  владеет UI выбора (см. docs/roadmap.md, открытый вопрос 2: "какие сертификаты предлагать" решает
-  listCertificateThumbprints(), "как их показать пользователю" — забота потребителя). Этот диалог —
-  пример такого потребительского UI поверх уже отфильтрованного списка, нужен только этой тестовой
+  Диалог выбора сертификата НЕ часть библиотеки — kontur-ofd-js-auth сознательно не владеет UI
+  выбора (см. docs/roadmap.md, открытый вопрос 2: "какие сертификаты предлагать" и "что о них
+  показать" решает listCertificates(), "как их отрисовать" — забота потребителя). Этот диалог —
+  пример такого потребительского UI поверх уже отфильтрованного списка с уже готовыми для показа
+  полями (имя, организация, издатель, срок действия, ИНН/ОГРН), нужен только этой тестовой
   странице, чтобы проверять сценарии 2 и 3 не только на первом сертификате из списка.
 -->
 <button id="btn-choose-cert">Выбрать сертификат для тестов 2-3 (диалог)</button>
@@ -52,7 +53,7 @@
   </div>
 </dialog>
 
-<button id="btn-list">1. Список сертификатов (listCertificateThumbprints)</button>
+<button id="btn-list">1. Список сертификатов (listCertificates)</button>
 <button id="btn-export">2. Экспорт выбранного сертификата (getCertificateBase64)</button>
 <button id="btn-roundtrip">3. Encrypt (сырой CAdESCOM) → Decrypt (наш адаптер) round-trip</button>
 <button id="btn-compare">4. Все сертификаты хранилища vs отфильтрованный список</button>
@@ -81,7 +82,7 @@
   let lastThumbprint = null;
 
   // Сырой обход хранилища в обход адаптера — чтобы увидеть ВСЕ сертификаты (включая
-  // непригодные) для сравнения с тем, что реально отдаёт listCertificateThumbprints().
+  // непригодные) для сравнения с тем, что реально отдаёт listCertificates().
   async function describeAllCertificates() {
     const store = await window.cadesplugin.CreateObjectAsync('CAdESCOM.Store');
     await store.Open(
@@ -132,11 +133,18 @@
   );
 
   const selectedCertEl = document.getElementById('selected-cert');
-  let selectedSubject = null;
+  let selectedCert = null;
+
+  function formatCertLabel(cert) {
+    const parts = [cert.ownerName ?? '(без CN)'];
+    if (cert.organization) parts.push(cert.organization);
+    parts.push('до ' + new Date(cert.validTo).toLocaleDateString('ru-RU'));
+    return `${parts.join(' — ')} (…${cert.thumbprint.slice(-8)})`;
+  }
 
   function renderSelectedCert() {
-    selectedCertEl.textContent = lastThumbprint
-      ? `Выбран сертификат: ${selectedSubject ?? ''} (…${lastThumbprint.slice(-8)})`
+    selectedCertEl.textContent = selectedCert
+      ? `Выбран сертификат: ${formatCertLabel(selectedCert)}`
       : 'Сертификат не выбран — будет использован первый подходящий';
   }
 
@@ -147,27 +155,26 @@
     certDialogList.textContent = 'Загрузка списка сертификатов…';
     certDialog.showModal();
     try {
-      // Диалогу нужны и отпечатки (что реально можно выбрать — решает адаптер), и subject
-      // (чтобы показать пользователю имя, а не голый отпечаток) — describeAllCertificates() уже
-      // делает сырой обход с обоими полями, отфильтровываем его результат по списку адаптера,
-      // а не выбираем сертификаты по своей логике.
-      const [all, filtered] = await Promise.all([describeAllCertificates(), adapter.listCertificateThumbprints()]);
-      const filteredSet = new Set(filtered);
-      const suitable = all.filter((c) => filteredSet.has(c.thumbprint));
+      // Ровно то, что реально предложил бы потребитель — данные уже отфильтрованы и разобраны
+      // самой библиотекой (имя/организация/издатель/срок/ИНН/ОГРН), без обхода в обход адаптера.
+      const certificates = await adapter.listCertificates();
 
       certDialogList.textContent = '';
-      if (suitable.length === 0) {
+      if (certificates.length === 0) {
         certDialogList.textContent = 'В хранилище нет ни одного подходящего сертификата.';
         return;
       }
-      for (const cert of suitable) {
+      for (const cert of certificates) {
         const option = document.createElement('button');
         option.type = 'button';
         option.className = 'cert-option';
-        option.textContent = `${cert.subject.slice(0, 60)} — …${cert.thumbprint.slice(-8)}`;
+        const details = [cert.inn ? `ИНН ${cert.inn}` : null, cert.ogrn ? `ОГРН(ИП) ${cert.ogrn}` : null, cert.issuerName ? `издан: ${cert.issuerName}` : null]
+          .filter(Boolean)
+          .join(', ');
+        option.innerHTML = `${formatCertLabel(cert)}${details ? `<br><small>${details}</small>` : ''}`;
         option.addEventListener('click', () => {
           lastThumbprint = cert.thumbprint;
-          selectedSubject = cert.subject;
+          selectedCert = cert;
           renderSelectedCert();
           certDialog.close();
         });
@@ -182,23 +189,24 @@
 
   document.getElementById('btn-list').addEventListener('click', async () => {
     try {
-      const thumbprints = await adapter.listCertificateThumbprints();
-      append('listCertificateThumbprints', thumbprints);
+      const certificates = await adapter.listCertificates();
+      append('listCertificates', certificates);
       if (!lastThumbprint) {
-        lastThumbprint = thumbprints[0] ?? null;
-        selectedSubject = null;
+        lastThumbprint = certificates[0]?.thumbprint ?? null;
+        selectedCert = certificates[0] ?? null;
         renderSelectedCert();
       }
     } catch (e) {
-      appendError('listCertificateThumbprints', e);
+      appendError('listCertificates', e);
     }
   });
 
   document.getElementById('btn-export').addEventListener('click', async () => {
     try {
       if (!lastThumbprint) {
-        const thumbprints = await adapter.listCertificateThumbprints();
-        lastThumbprint = thumbprints[0] ?? null;
+        const certificates = await adapter.listCertificates();
+        lastThumbprint = certificates[0]?.thumbprint ?? null;
+        selectedCert = certificates[0] ?? null;
         renderSelectedCert();
       }
       if (!lastThumbprint) { append('getCertificateBase64', 'No certificates found'); return; }
@@ -212,8 +220,9 @@
   document.getElementById('btn-roundtrip').addEventListener('click', async () => {
     try {
       if (!lastThumbprint) {
-        const thumbprints = await adapter.listCertificateThumbprints();
-        lastThumbprint = thumbprints[0] ?? null;
+        const certificates = await adapter.listCertificates();
+        lastThumbprint = certificates[0]?.thumbprint ?? null;
+        selectedCert = certificates[0] ?? null;
         renderSelectedCert();
       }
       if (!lastThumbprint) { append('roundtrip', 'No certificates found'); return; }
@@ -265,8 +274,8 @@
 
   document.getElementById('btn-compare').addEventListener('click', async () => {
     try {
-      const [all, filtered] = await Promise.all([describeAllCertificates(), adapter.listCertificateThumbprints()]);
-      const filteredSet = new Set(filtered);
+      const [all, filtered] = await Promise.all([describeAllCertificates(), adapter.listCertificates()]);
+      const filteredSet = new Set(filtered.map((c) => c.thumbprint));
       const table = all.map((c) => ({
         thumbprint: c.thumbprint,
         subject: c.subject.slice(0, 40),
@@ -277,7 +286,7 @@
         keyUsage: c.keyUsage,
         includedByAdapter: filteredSet.has(c.thumbprint) ? '✅' : '❌',
       }));
-      append(`Все сертификаты хранилища (${all.length}) vs listCertificateThumbprints() (${filtered.length})`, table);
+      append(`Все сертификаты хранилища (${all.length}) vs listCertificates() (${filtered.length})`, table);
     } catch (e) {
       appendError('compare', e);
     }
@@ -285,8 +294,8 @@
 
   document.getElementById('btn-unsuitable').addEventListener('click', async () => {
     try {
-      const [all, filtered] = await Promise.all([describeAllCertificates(), adapter.listCertificateThumbprints()]);
-      const filteredSet = new Set(filtered);
+      const [all, filtered] = await Promise.all([describeAllCertificates(), adapter.listCertificates()]);
+      const filteredSet = new Set(filtered.map((c) => c.thumbprint));
       const unsuitable = all.find((c) => !filteredSet.has(c.thumbprint));
       if (!unsuitable) {
         append('getCertificateBase64 on unsuitable cert', 'Все сертификаты в хранилище пригодны — нечего проверить');

@@ -5,7 +5,7 @@ import type { EncryptedKeyResponse } from '../src/types.js';
 
 function makeAdapter(overrides: Partial<CryptoProAdapter> = {}): CryptoProAdapter {
   return {
-    listCertificateThumbprints: vi.fn().mockResolvedValue(['THUMB-1']),
+    listCertificates: vi.fn().mockResolvedValue([]),
     getCertificateBase64: vi.fn().mockResolvedValue('BASE64-CERT'),
     decryptEncryptedKey: vi.fn().mockResolvedValue('BASE64-DECRYPTED'),
     ...overrides,

@@ -1,4 +1,4 @@
-import type { CryptoProAdapter } from './CryptoProAdapter.js';
+import type { CertificateSummary, CryptoProAdapter } from './CryptoProAdapter.js';
 import type { CadesCertificate, CadesPlugin, CadesStore } from './cadesplugin.types.js';
 
 /**
@@ -17,27 +17,27 @@ export class WindowCadesPluginAdapter implements CryptoProAdapter {
    * `docs/roadmap.md`, открытый вопрос 2 — живой тест показал, что реальное хранилище пользователя
    * обычно содержит и непригодные сертификаты (RSA, служебные, просроченные).
    */
-  async listCertificateThumbprints(): Promise<readonly string[]> {
+  async listCertificates(): Promise<readonly CertificateSummary[]> {
     return this.withStore(async (store) => {
       const certificates = await store.Certificates;
       const count = await certificates.Count;
 
-      const thumbprints: string[] = [];
+      const summaries: CertificateSummary[] = [];
       for (let i = 1; i <= count; i++) {
         const certificate = await certificates.Item(i);
         if ((await unsuitabilityReasons(certificate)).length === 0) {
-          thumbprints.push(normalizeThumbprint(await certificate.Thumbprint));
+          summaries.push(await describeCertificate(certificate));
         }
       }
 
-      return thumbprints;
+      return summaries;
     });
   }
 
   /**
-   * В отличие от `listCertificateThumbprints()`, здесь сертификат передаётся явно потребителем
-   * (например, в обход UI выбора) — поэтому на непригодный сертификат бросаем понятную ошибку с
-   * перечислением причин, а не молча пропускаем.
+   * В отличие от `listCertificates()`, здесь сертификат передаётся явно потребителем (например, в
+   * обход UI выбора) — поэтому на непригодный сертификат бросаем понятную ошибку с перечислением
+   * причин, а не молча пропускаем.
    */
   async getCertificateBase64(thumbprint: string): Promise<string> {
     const { plugin: cadesplugin } = await getCadesplugin();
@@ -237,6 +237,97 @@ async function allowsKeyExchange(certificate: CadesCertificate): Promise<boolean
   ]);
 
   return keyEncipherment || keyAgreement;
+}
+
+async function describeCertificate(certificate: CadesCertificate): Promise<CertificateSummary> {
+  const [thumbprint, subjectName, issuerName, validTo] = await Promise.all([
+    certificate.Thumbprint,
+    certificate.SubjectName,
+    certificate.IssuerName,
+    certificate.ValidToDate,
+  ]);
+
+  const subject = parseDistinguishedName(subjectName);
+  const issuer = parseDistinguishedName(issuerName);
+
+  return {
+    thumbprint: normalizeThumbprint(thumbprint),
+    ownerName: subject.get('CN') ?? null,
+    organization: subject.get('O') ?? null,
+    issuerName: issuer.get('CN') ?? null,
+    validTo: new Date(validTo),
+    inn: subject.get('ИНН') ?? null,
+    // ОГРН — у юрлиц, ОГРНИП — у ИП; сертификат несёт только один из двух атрибутов.
+    ogrn: subject.get('ОГРН') ?? subject.get('ОГРНИП') ?? null,
+  };
+}
+
+/**
+ * `SubjectName`/`IssuerName` — DN-строка вида `"CN=Иванов Иван, SN=Иванов, ИНН=..., O=..."`.
+ * Формат/набор атрибутов нигде официально не специфицирован — распарсено так же, как это делает
+ * официальный демо-код CryptoPro (`async_code.js`: `CertificateAdjuster.GetCertName()`/`GetIssuer()`
+ * извлекают `CN=` из этой же строки, не через `GetInfo()` — см. `docs/roadmap.md`). Значения могут
+ * быть заключены в кавычки с удвоением внутренних кавычек (`"ООО ""Ромашка"""`, RFC 2253/4514
+ * quoted-string — реально наблюдалось у CN издателя на живом сертификате 2026-09-25, не
+ * гипотетический случай) или содержать экранированную запятую вне кавычек (`\,`) — наивный
+ * `split(',')` в обоих случаях разбил бы значение на два поля, поэтому запятые/кавычки внутри
+ * значения не считаются его границей.
+ */
+function parseDistinguishedName(dn: string): ReadonlyMap<string, string> {
+  const result = new Map<string, string>();
+
+  for (const rawComponent of splitDnComponents(dn)) {
+    const component = rawComponent.trim();
+    const equalsIndex = component.indexOf('=');
+    if (equalsIndex === -1) continue;
+
+    const key = component.slice(0, equalsIndex).trim().toUpperCase();
+    const rawValue = component.slice(equalsIndex + 1).trim();
+    const value = unquoteDnValue(rawValue).replace(/\\(.)/g, '$1');
+    if (value !== '' && !result.has(key)) {
+      result.set(key, value);
+    }
+  }
+
+  return result;
+}
+
+/** Значение целиком в кавычках (`"..."`) — снимаем внешнюю пару и схлопываем `""` внутри в одну кавычку. */
+function unquoteDnValue(value: string): string {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replace(/""/g, '"');
+  }
+
+  return value;
+}
+
+function splitDnComponents(value: string): readonly string[] {
+  const parts: string[] = [];
+  let current = '';
+  let insideQuotes = false;
+
+  for (let i = 0; i < value.length; i++) {
+    const char = value.charAt(i);
+    if (char === '\\' && i + 1 < value.length) {
+      current += char + value.charAt(i + 1);
+      i++;
+      continue;
+    }
+    if (char === '"') {
+      insideQuotes = !insideQuotes;
+      current += char;
+      continue;
+    }
+    if (char === ',' && !insideQuotes) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+
+  return parts;
 }
 
 /** Пустой массив — сертификат пригоден для аутентификации по ЭП в Контур.ОФД. */

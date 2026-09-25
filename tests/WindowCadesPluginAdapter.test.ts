@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WindowCadesPluginAdapter } from '../src/WindowCadesPluginAdapter.js';
+import type { CertificateSummary } from '../src/CryptoProAdapter.js';
 import type { CadesCertificate, CadesCertificates, CadesEnvelopedData, CadesPlugin, CadesStore } from '../src/cadesplugin.types.js';
+
+function firstCertificate(certificates: readonly CertificateSummary[]): CertificateSummary {
+  const [certificate] = certificates;
+  if (certificate === undefined) {
+    throw new Error('Expected at least one certificate in the test double');
+  }
+
+  return certificate;
+}
 
 const GOST_2012_256_OID = '1.2.643.7.1.1.1.1';
 const RSA_OID = '1.2.840.113549.1.1.1';
@@ -21,11 +31,15 @@ interface FakeCertSpec {
   readonly privateKeyUsageFrom?: string | null;
   readonly privateKeyUsageTo?: string | null;
   readonly keyUsage?: FakeKeyUsageSpec;
+  readonly subjectName?: string;
+  readonly issuerName?: string;
 }
 
 function makeCertificate(spec: FakeCertSpec): CadesCertificate {
   return {
     Thumbprint: Promise.resolve(spec.thumbprint),
+    SubjectName: Promise.resolve(spec.subjectName ?? `CN=Test Owner ${spec.thumbprint}`),
+    IssuerName: Promise.resolve(spec.issuerName ?? 'CN=Test CA'),
     Export: vi.fn().mockResolvedValue(spec.base64 ?? `EXPORTED-${spec.thumbprint}`),
     ValidFromDate: Promise.resolve(spec.validFrom ?? '2020-01-01T00:00:00.000Z'),
     ValidToDate: Promise.resolve(spec.validTo ?? '2099-01-01T00:00:00.000Z'),
@@ -129,19 +143,19 @@ describe('WindowCadesPluginAdapter', () => {
     it('throws a clear error instead of a raw TypeError', async () => {
       const adapter = new WindowCadesPluginAdapter();
 
-      await expect(adapter.listCertificateThumbprints()).rejects.toThrow(/cadesplugin is not available/);
+      await expect(adapter.listCertificates()).rejects.toThrow(/cadesplugin is not available/);
     });
   });
 
-  describe('listCertificateThumbprints', () => {
+  describe('listCertificates', () => {
     it('opens the current-user My store and returns normalized thumbprints', async () => {
       const store = makeStore([{ thumbprint: 'abc123' }, { thumbprint: 'DEF456' }]);
       stubWindowCadesplugin(makeCadesplugin({ store }));
       const adapter = new WindowCadesPluginAdapter();
 
-      const thumbprints = await adapter.listCertificateThumbprints();
+      const certificates = await adapter.listCertificates();
 
-      expect(thumbprints).toEqual(['ABC123', 'DEF456']);
+      expect(certificates.map((c) => c.thumbprint)).toEqual(['ABC123', 'DEF456']);
       expect(store.Open).toHaveBeenCalledWith(2, 'My', 2);
       expect(store.Close).toHaveBeenCalledTimes(1);
     });
@@ -158,7 +172,7 @@ describe('WindowCadesPluginAdapter', () => {
       stubWindowCadesplugin(makeCadesplugin({ store }));
       const adapter = new WindowCadesPluginAdapter();
 
-      await expect(adapter.listCertificateThumbprints()).rejects.toThrow('boom');
+      await expect(adapter.listCertificates()).rejects.toThrow('boom');
       expect(store.Close).toHaveBeenCalledTimes(1);
     });
 
@@ -176,9 +190,9 @@ describe('WindowCadesPluginAdapter', () => {
       stubWindowCadesplugin(makeCadesplugin({ store }));
       const adapter = new WindowCadesPluginAdapter();
 
-      const thumbprints = await adapter.listCertificateThumbprints();
+      const certificates = await adapter.listCertificates();
 
-      expect(thumbprints).toEqual(['GOOD']);
+      expect(certificates.map((c) => c.thumbprint)).toEqual(['GOOD']);
     });
 
     it('does not treat an absent PrivateKeyUsagePeriod or KeyUsage extension as a restriction', async () => {
@@ -189,9 +203,9 @@ describe('WindowCadesPluginAdapter', () => {
       stubWindowCadesplugin(makeCadesplugin({ store }));
       const adapter = new WindowCadesPluginAdapter();
 
-      const thumbprints = await adapter.listCertificateThumbprints();
+      const certificates = await adapter.listCertificates();
 
-      expect(thumbprints).toEqual(['NO-EXTENSIONS', 'KEY-AGREEMENT-ONLY']);
+      expect(certificates.map((c) => c.thumbprint)).toEqual(['NO-EXTENSIONS', 'KEY-AGREEMENT-ONLY']);
     });
 
     it('treats a PrivateKeyUsagePeriod read that throws the same as an absent extension', async () => {
@@ -203,9 +217,89 @@ describe('WindowCadesPluginAdapter', () => {
       stubWindowCadesplugin(makeCadesplugin({ store }));
       const adapter = new WindowCadesPluginAdapter();
 
-      const thumbprints = await adapter.listCertificateThumbprints();
+      const certificates = await adapter.listCertificates();
 
-      expect(thumbprints).toEqual(['THROWS-ON-READ']);
+      expect(certificates.map((c) => c.thumbprint)).toEqual(['THROWS-ON-READ']);
+    });
+
+    it('parses owner name, organization, issuer, INN and OGRN out of the DN strings', async () => {
+      const store = makeStore([
+        {
+          thumbprint: 'FULL-DN',
+          subjectName: 'SN=Русанов, G=Евгений Александрович, CN=Русанов Евгений Александрович, C=RU, ИНН=182811189442, ОГРНИП=326965800118081',
+          issuerName: 'CN=Тестовый УЦ, O=ООО Тестовый УЦ, C=RU',
+          validTo: '2027-01-01T00:00:00.000Z',
+        },
+      ]);
+      stubWindowCadesplugin(makeCadesplugin({ store }));
+      const adapter = new WindowCadesPluginAdapter();
+
+      const certificate = firstCertificate(await adapter.listCertificates());
+
+      expect(certificate).toEqual({
+        thumbprint: 'FULL-DN',
+        ownerName: 'Русанов Евгений Александрович',
+        organization: null,
+        issuerName: 'Тестовый УЦ',
+        validTo: new Date('2027-01-01T00:00:00.000Z'),
+        inn: '182811189442',
+        ogrn: '326965800118081',
+      });
+    });
+
+    it('reads OGRN from either ОГРН (legal entity) or ОГРНИП (sole proprietor), and organization when present', async () => {
+      const store = makeStore([
+        { thumbprint: 'LEGAL-ENTITY', subjectName: 'CN=ООО Ромашка, O=ООО Ромашка, ИНН=7701234567, ОГРН=1027700132195' },
+      ]);
+      stubWindowCadesplugin(makeCadesplugin({ store }));
+      const adapter = new WindowCadesPluginAdapter();
+
+      const certificate = firstCertificate(await adapter.listCertificates());
+
+      expect(certificate.organization).toBe('ООО Ромашка');
+      expect(certificate.ogrn).toBe('1027700132195');
+    });
+
+    it('leaves organization/INN/OGRN null when the DN does not carry them', async () => {
+      const store = makeStore([{ thumbprint: 'BARE-CN', subjectName: 'CN=7927f6e3-17e9-4b1e-8909-25826c74049f' }]);
+      stubWindowCadesplugin(makeCadesplugin({ store }));
+      const adapter = new WindowCadesPluginAdapter();
+
+      const certificate = firstCertificate(await adapter.listCertificates());
+
+      expect(certificate).toMatchObject({ ownerName: '7927f6e3-17e9-4b1e-8909-25826c74049f', organization: null, inn: null, ogrn: null });
+    });
+
+    it('does not split a DN value on a backslash-escaped comma', async () => {
+      const store = makeStore([{ thumbprint: 'ESCAPED-COMMA', subjectName: 'CN=Иванов Иван, O=Рога\\, копыта и Ко' }]);
+      stubWindowCadesplugin(makeCadesplugin({ store }));
+      const adapter = new WindowCadesPluginAdapter();
+
+      const certificate = firstCertificate(await adapter.listCertificates());
+
+      expect(certificate.organization).toBe('Рога, копыта и Ко');
+    });
+
+    it('unwraps a quoted DN value and collapses doubled internal quotes (RFC 2253 quoted-string)', async () => {
+      // Реально встретилось на живом сертификате 2026-09-25 — CN издателя пришёл именно в таком
+      // виде, не гипотетический случай.
+      const store = makeStore([{ thumbprint: 'QUOTED-ISSUER', issuerName: 'CN="ООО ""Сертум-Про"""' }]);
+      stubWindowCadesplugin(makeCadesplugin({ store }));
+      const adapter = new WindowCadesPluginAdapter();
+
+      const certificate = firstCertificate(await adapter.listCertificates());
+
+      expect(certificate.issuerName).toBe('ООО "Сертум-Про"');
+    });
+
+    it('does not split a quoted DN value on a comma inside the quotes', async () => {
+      const store = makeStore([{ thumbprint: 'QUOTED-COMMA', subjectName: 'CN=Иванов Иван, O="ООО ""Ромашка, Инвест"""' }]);
+      stubWindowCadesplugin(makeCadesplugin({ store }));
+      const adapter = new WindowCadesPluginAdapter();
+
+      const certificate = firstCertificate(await adapter.listCertificates());
+
+      expect(certificate.organization).toBe('ООО "Ромашка, Инвест"');
     });
   });
 

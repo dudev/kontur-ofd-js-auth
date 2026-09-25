@@ -55,6 +55,16 @@ export interface CadesKeyUsage {
  */
 export interface CadesCertificate {
   readonly Thumbprint: Promise<string>;
+  /**
+   * DN-строка (`"CN=..., SN=..., ИНН=..., ..."`), формат и набор атрибутов не гарантирован
+   * официальной документацией — только то, что реально наблюдается у выпущенных CryptoPro
+   * сертификатов. Разбирается в `WindowCadesPluginAdapter.ts` тем же способом, что использует
+   * официальный демо-код (`CertificateAdjuster.GetCertName`/`GetIssuer` в `async_code.js`) —
+   * извлечением `CN=` из этой же строки, не через `GetInfo()` (тот не задокументирован и делает
+   * лишний вызов к плагину на каждое поле).
+   */
+  readonly SubjectName: Promise<string>;
+  readonly IssuerName: Promise<string>;
   /** Официальный демо-код оборачивает результат в `new Date(...)` — сам плагин не гарантирует тип. */
   readonly ValidFromDate: Promise<string>;
   readonly ValidToDate: Promise<string>;
