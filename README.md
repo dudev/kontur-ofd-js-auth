@@ -15,7 +15,7 @@ PHP) — this library only bridges the two backend calls with the local decrypti
 Status: orchestration (`certificateAuthFlow.ts`) and the `window.cadesplugin` binding
 (`WindowCadesPluginAdapter`) are implemented, tested against a mocked plugin, and verified
 2026-09-25 against a real КриптоПро CSP + ЭЦП Browser plug-in installation (real certificate store,
-real GOST certificate, real encrypt/decrypt round-trip) — see `docs/roadmap.md`, open question 1.
+real GOST certificate, real encrypt/decrypt round-trip) — see `docs/roadmap.md` for what's left.
 
 ## Installation
 

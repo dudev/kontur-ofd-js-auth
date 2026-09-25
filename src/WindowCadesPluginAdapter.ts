@@ -3,7 +3,7 @@ import type { CadesCertificate, CadesPlugin, CadesStore } from './cadesplugin.ty
 
 /** `CryptoProAdapter` поверх `window.cadesplugin` (КриптоПро ЭЦП Browser plug-in) — verified against real hardware 2026-09-25, see docs/roadmap.md. */
 export class WindowCadesPluginAdapter implements CryptoProAdapter {
-  /** Только сертификаты, пригодные для аутентификации по ЭП в Контур.ОФД — непригодные тихо пропускаются (см. docs/roadmap.md, открытый вопрос 2). */
+  /** Только сертификаты, пригодные для аутентификации по ЭП в Контур.ОФД — непригодные тихо пропускаются. */
   async listCertificates(): Promise<readonly CertificateSummary[]> {
     return this.withStore(async (store) => {
       const certificates = await store.Certificates;
