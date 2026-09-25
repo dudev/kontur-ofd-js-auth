@@ -9,6 +9,10 @@ DISABLE:
 DISABLE_LINTERS:
   # Own ESLint job already covers this with project-specific config (typescript-eslint strict).
   - TYPESCRIPT_ES
+  # StandardJS style (no semicolons, no trailing commas) conflicts with the project's own
+  # ESLint config, which is the source of truth for code style.
+  - JAVASCRIPT_STANDARD
+  - TYPESCRIPT_STANDARD
   # Bundled grype v0.94.0 can't load its current vulnerability DB (schema migration error);
   # trivy and npm audit already cover dependency vulnerabilities.
   - REPOSITORY_GRYPE

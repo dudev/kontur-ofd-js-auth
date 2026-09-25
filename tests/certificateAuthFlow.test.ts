@@ -57,26 +57,24 @@ describe('decryptForApproveCert', () => {
   it('rejects an empty encryptedKeyBase64 without calling the adapter', async () => {
     const adapter = makeAdapter();
 
-    await expect(
-      decryptForApproveCert(adapter, { ...encryptedKey, encryptedKeyBase64: '' }),
-    ).rejects.toThrow(/encryptedKeyBase64/);
+    await expect(decryptForApproveCert(adapter, { ...encryptedKey, encryptedKeyBase64: '' })).rejects.toThrow(
+      /encryptedKeyBase64/,
+    );
     expect(adapter.decryptEncryptedKey).not.toHaveBeenCalled();
   });
 
   it('rejects an empty approveCertUrl without calling the adapter', async () => {
     const adapter = makeAdapter();
 
-    await expect(
-      decryptForApproveCert(adapter, { ...encryptedKey, approveCertUrl: '' }),
-    ).rejects.toThrow(/approveCertUrl/);
+    await expect(decryptForApproveCert(adapter, { ...encryptedKey, approveCertUrl: '' })).rejects.toThrow(
+      /approveCertUrl/,
+    );
     expect(adapter.decryptEncryptedKey).not.toHaveBeenCalled();
   });
 
   it('rejects an empty decryption result from the adapter', async () => {
     const adapter = makeAdapter({ decryptEncryptedKey: vi.fn().mockResolvedValue('') });
 
-    await expect(decryptForApproveCert(adapter, encryptedKey)).rejects.toThrow(
-      /decryptedBytesBase64/,
-    );
+    await expect(decryptForApproveCert(adapter, encryptedKey)).rejects.toThrow(/decryptedBytesBase64/);
   });
 });

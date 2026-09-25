@@ -275,11 +275,23 @@ async function unsuitabilityReasons(certificate: CadesCertificate): Promise<read
   ]);
 
   const reasons: string[] = [];
-  if (!isGost) reasons.push('does not use a GOST public-key algorithm supported by Kontur.OFD (ГОСТ Р 34.10-2001/2012)');
-  if (!isValidPeriod) reasons.push('is expired or not yet valid');
-  if (!hasPrivateKey) reasons.push('has no private key available in the current user\'s store');
-  if (!isWithinKeyPeriod) reasons.push('is outside its PrivateKeyUsagePeriod (private key itself has expired separately from the certificate)');
-  if (!canExchangeKey) reasons.push('KeyUsage does not permit key encipherment or key agreement (likely a signature-only certificate)');
+  if (!isGost) {
+    reasons.push('does not use a GOST public-key algorithm supported by Kontur.OFD (ГОСТ Р 34.10-2001/2012)');
+  }
+  if (!isValidPeriod) {
+    reasons.push('is expired or not yet valid');
+  }
+  if (!hasPrivateKey) {
+    reasons.push("has no private key available in the current user's store");
+  }
+  if (!isWithinKeyPeriod) {
+    reasons.push(
+      'is outside its PrivateKeyUsagePeriod (private key itself has expired separately from the certificate)',
+    );
+  }
+  if (!canExchangeKey) {
+    reasons.push('KeyUsage does not permit key encipherment or key agreement (likely a signature-only certificate)');
+  }
 
   return reasons;
 }

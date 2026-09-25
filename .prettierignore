@@ -1,0 +1,6 @@
+dist/
+coverage/
+megalinter-reports/
+package-lock.json
+# Hand-formatted manual test page — reformatting would rewrite the whole file for no gain.
+manual-test/
