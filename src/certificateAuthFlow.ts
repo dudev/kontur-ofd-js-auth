@@ -22,17 +22,19 @@ export async function getCertificateForInit(
  * собирает тело для шага 2 (`POST .../auth/certificate-frontend/approve`). Ни `encryptedKeyBase64`,
  * ни результат расшифровки этой функцией никуда не сохраняются — вызывающий код отправляет
  * возвращённый объект на свой backend и на этом всё, ни один байт не должен задержаться дольше.
+ *
+ * Без отпечатка сертификата — расшифровка (`CryptoProAdapter::decryptEncryptedKey()`) сама находит
+ * подходящий приватный ключ по содержимому CMS-конверта, не по явно выбранному сертификату (см.
+ * `WindowCadesPluginAdapter`).
  */
 export async function decryptForApproveCert(
   adapter: CryptoProAdapter,
   encryptedKey: EncryptedKeyResponse,
-  thumbprint: string,
 ): Promise<ApproveCertPayload> {
-  assertNonEmpty(thumbprint, 'thumbprint');
   assertNonEmpty(encryptedKey.encryptedKeyBase64, 'encryptedKey.encryptedKeyBase64');
   assertNonEmpty(encryptedKey.approveCertUrl, 'encryptedKey.approveCertUrl');
 
-  const decryptedBytesBase64 = await adapter.decryptEncryptedKey(encryptedKey.encryptedKeyBase64, thumbprint);
+  const decryptedBytesBase64 = await adapter.decryptEncryptedKey(encryptedKey.encryptedKeyBase64);
   assertNonEmpty(decryptedBytesBase64, 'decryptedBytesBase64');
 
   return {

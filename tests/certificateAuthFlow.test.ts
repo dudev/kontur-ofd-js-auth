@@ -45,42 +45,37 @@ describe('decryptForApproveCert', () => {
   it('decrypts via the adapter and builds the approve-cert payload', async () => {
     const adapter = makeAdapter();
 
-    const result = await decryptForApproveCert(adapter, encryptedKey, 'THUMB-1');
+    const result = await decryptForApproveCert(adapter, encryptedKey);
 
     expect(result).toEqual({
       approveCertUrl: encryptedKey.approveCertUrl,
       decryptedBytesBase64: 'BASE64-DECRYPTED',
     });
-    expect(adapter.decryptEncryptedKey).toHaveBeenCalledWith('BASE64-ENCRYPTED', 'THUMB-1');
+    expect(adapter.decryptEncryptedKey).toHaveBeenCalledWith('BASE64-ENCRYPTED');
   });
 
-  it('rejects an empty thumbprint without calling the adapter', async () => {
+  it('rejects an empty encryptedKeyBase64 without calling the adapter', async () => {
     const adapter = makeAdapter();
 
-    await expect(decryptForApproveCert(adapter, encryptedKey, '')).rejects.toThrow(/thumbprint/);
+    await expect(
+      decryptForApproveCert(adapter, { ...encryptedKey, encryptedKeyBase64: '' }),
+    ).rejects.toThrow(/encryptedKeyBase64/);
     expect(adapter.decryptEncryptedKey).not.toHaveBeenCalled();
   });
 
-  it('rejects an empty encryptedKeyBase64', async () => {
+  it('rejects an empty approveCertUrl without calling the adapter', async () => {
     const adapter = makeAdapter();
 
     await expect(
-      decryptForApproveCert(adapter, { ...encryptedKey, encryptedKeyBase64: '' }, 'THUMB-1'),
-    ).rejects.toThrow(/encryptedKeyBase64/);
-  });
-
-  it('rejects an empty approveCertUrl', async () => {
-    const adapter = makeAdapter();
-
-    await expect(
-      decryptForApproveCert(adapter, { ...encryptedKey, approveCertUrl: '' }, 'THUMB-1'),
+      decryptForApproveCert(adapter, { ...encryptedKey, approveCertUrl: '' }),
     ).rejects.toThrow(/approveCertUrl/);
+    expect(adapter.decryptEncryptedKey).not.toHaveBeenCalled();
   });
 
   it('rejects an empty decryption result from the adapter', async () => {
     const adapter = makeAdapter({ decryptEncryptedKey: vi.fn().mockResolvedValue('') });
 
-    await expect(decryptForApproveCert(adapter, encryptedKey, 'THUMB-1')).rejects.toThrow(
+    await expect(decryptForApproveCert(adapter, encryptedKey)).rejects.toThrow(
       /decryptedBytesBase64/,
     );
   });
